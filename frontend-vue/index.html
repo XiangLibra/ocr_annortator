@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>OCR Insight Editor (Vue + CDN)</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <div id="app" class="shell">
+    <header>
+      <h1>🧠 OCR Insight Editor</h1>
+      <div class="api-field">
+        <span>API 位址</span>
+        <input v-model="apiBase" placeholder="http://127.0.0.1:8000" />
+      </div>
+    </header>
+
+    <div class="card">
+      <form class="upload" @submit.prevent="handleUpload">
+        <input ref="fileInput" type="file" multiple accept=".pdf,.png,.jpg,.jpeg" />
+        <select v-model="language">
+          <option>繁體中文</option>
+          <option>English</option>
+        </select>
+        <button type="submit" :disabled="loading">上傳辨識</button>
+        <span v-if="loading">上傳 / OCR 中…</span>
+      </form>
+    </div>
+
+    <div v-for="fr in items" :key="fr.fileId" class="file-block">
+      <h2 style="margin: 6px 0 8px;">{{ fr.filename }}</h2>
+
+      <div v-for="page in fr.pages" :key="page.pageIndex" class="page-card">
+        <page-canvas :page="page" @edited="updateDiff(fr)" />
+      </div>
+
+      <div style="margin-top: 10px;">
+        <label>整體文字（可選，直接手動修正）</label>
+        <textarea
+          :value="fr.correctedFullText ?? fr.fullText"
+          :placeholder="fr.fullText"
+          @input="(fr.correctedFullText = $event.target.value, updateDiff(fr))"
+        ></textarea>
+      </div>
+
+      <div class="actions">
+        <button @click="handleSave(fr)">💾 儲存修正</button>
+        <button v-if="exportReady[fr.fileId]" @click="handleDownload(fr)">⬇️ 下載匯出 (ZIP)</button>
+      </div>
+
+      <div v-if="diffs[fr.fileId]" class="diff-box">
+        <h3 style="margin: 0 0 6px;">差異比較</h3>
+        <text-diff :before="diffs[fr.fileId].before" :after="diffs[fr.fileId].after"></text-diff>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/konva@9/konva.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/jszip@3/dist/jszip.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/diff@7/dist/diff.min.js"></script>
+  <script src="/static/script.js"></script>
+</body>
+</html>
