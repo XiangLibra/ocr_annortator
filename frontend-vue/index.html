@@ -69,7 +69,7 @@
     </div>
     <div class="card" style="margin-top:16px;">
       <h3 style="margin:0 0 8px;">🔀 多代理比對 & 對話（同頁）</h3>
-      <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(280px,1fr)); gap:12px;">
+      <div style="display:flex; flex-direction:column; gap:12px;">
         <div class="list" style="border:1px solid #e3e7ef; border-radius:10px; padding:10px; background:#fff;">
           <h4 style="margin:0 0 6px;">選擇要比對的 OCR 檔（至少兩個）</h4>
           <div style="display:flex; flex-direction:column; gap:6px; max-height:220px; overflow:auto;">
@@ -121,163 +121,184 @@
             </div>
           </div>
         </div>
+        <div class="list" v-if="compareResult" style="border:1px solid #e3e7ef; border-radius:10px; padding:10px; background:#fff;">
+          <h4 style="margin:0 0 6px;">💬 聊天</h4>
+          <div class="chat-shell">
+            <div class="chat-history" v-if="chatHistory && chatHistory.length">
+              <div v-for="(m,idx) in chatHistory" :key="idx" class="chat-msg" :class="m.role === 'user' ? 'me' : 'ai'">
+                <div class="chat-meta">
+                  <span class="chat-role">{{ m.role === 'user' ? '你' : '助理' }}</span>
+                </div>
+                <div class="chat-bubble" v-if="m.html" v-html="m.html"></div>
+                <div class="chat-bubble" v-else>{{ m.text }}</div>
+                <div class="chat-actions">
+                  <span>👍</span><span>👎</span><span>↻</span><span>…</span>
+                </div>
+              </div>
+            </div>
+            <div class="chat-input-row">
+              <textarea v-model="chatInput" placeholder="提出任何問題" rows="2"></textarea>
+              <button @click="runChat" :disabled="chatSending">💬 送出</button>
+            </div>
+          </div>
+        </div>
+        <div class="list" v-else style="border:1px dashed #e3e7ef; border-radius:10px; padding:10px; background:#fbfdff; color:#4a4f58;">
+          <h4 style="margin:0 0 6px;">🗨️ 多代理聊天 / 指令</h4>
+          <p style="margin:0;">請先完成「比對文件」，完成後會顯示聊天介面。</p>
+        </div>
       </div>
-      <div class="list" style="border:1px solid #e3e7ef; border-radius:10px; padding:10px; background:#fff; margin-top:12px;">
-        <button @click="advancedOpen = !advancedOpen" style="margin-bottom:8px;">⚙️ 進階</button>
-        <div v-if="advancedOpen" style="display:grid; grid-template-columns: repeat(auto-fit, minmax(240px,1fr)); gap:10px;">
-          <div style="grid-column: 1 / -1; border:1px dashed #e3e7ef; padding:10px; border-radius:10px; background:#fbfdff;">
-            <h4 style="margin:0 0 6px;">🗨️ 多代理聊天 / 指令</h4>
-            <label>策略</label>
-            <select v-model="chatStrategy" style="width:100%; padding:6px; border:1px solid #cfd6e4; border-radius:8px; margin-bottom:6px;">
-              <option value="auto">auto</option>
-              <option value="single">single</option>
-              <option value="parallel">parallel</option>
-              <option value="sequential">sequential</option>
-              <option value="branched">branched (DAG)</option>
-            </select>
-            <label>選擇 Agent（可留空）</label>
-            <div style="display:flex; flex-direction:column; gap:8px; margin-bottom:6px;">
-              <div v-for="a in agents" :key="a.name" style="border:1px solid #e3e7ef; border-radius:10px; padding:8px; background:#fff;">
-                <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
-                  <label style="display:flex; align-items:center; gap:6px; cursor:pointer;">
-                    <input type="checkbox" :value="a.name" v-model="chatAgents">
-                    <span>{{ a.name }}</span>
-                  </label>
-                  <button type="button" @click="toggleAgent(a.name)">{{ agentMeta[a.name]?.expanded ? "收合" : "展開" }}</button>
-                  <span style="font-size:12px; color:#526; background:#eef3fb; padding:2px 6px; border-radius:6px;">{{ a.model }}</span>
+    </div>
+    <div class="list" style="border:1px solid #e3e7ef; border-radius:10px; padding:10px; background:#fff; margin-top:12px;">
+      <button @click="advancedOpen = !advancedOpen" style="margin-bottom:8px;">⚙️ 進階</button>
+      <div v-if="advancedOpen" style="display:grid; grid-template-columns: repeat(auto-fit, minmax(240px,1fr)); gap:10px;">
+        <div style="grid-column: 1 / -1; border:1px dashed #e3e7ef; padding:10px; border-radius:10px; background:#fbfdff;">
+          <h4 style="margin:0 0 6px;">🗨️ 多代理上下文設定</h4>
+          <label style="display:flex; align-items:center; gap:6px; margin-bottom:6px;">
+            <input type="checkbox" v-model="chatUseCompare"> 使用上一筆比對結果作為上下文
+          </label>
+          <div v-if="chatUseCompare && compareResult" style="font-size:13px; color:#394; margin-bottom:6px;">
+            <div>摘要（供上下文）：</div>
+            <pre class="wrap" style="max-height:120px; overflow:auto;">{{ compareFinalText }}</pre>
+          </div>
+          <label>補充說明 / 系統指令（可留空）</label>
+          <textarea v-model="chatContextNote" placeholder="會附加在聊天上下文中" style="margin-bottom:6px;"></textarea>
+          <label>策略</label>
+          <select v-model="chatStrategy" style="width:100%; padding:6px; border:1px solid #cfd6e4; border-radius:8px; margin-bottom:6px;">
+            <option value="auto">auto</option>
+            <option value="single">single</option>
+            <option value="parallel">parallel</option>
+            <option value="sequential">sequential</option>
+            <option value="branched">branched (DAG)</option>
+          </select>
+          <label>選擇 Agent（可留空）</label>
+          <div style="display:flex; flex-direction:column; gap:8px; margin-bottom:6px;">
+            <div v-for="a in agents" :key="a.name" style="border:1px solid #e3e7ef; border-radius:10px; padding:8px; background:#fff;">
+              <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+                <label style="display:flex; align-items:center; gap:6px; cursor:pointer;">
+                  <input type="checkbox" :value="a.name" v-model="chatAgents">
+                  <span>{{ a.name }}</span>
+                </label>
+                <button type="button" @click="toggleAgent(a.name)">{{ agentMeta[a.name]?.expanded ? "收合" : "展開" }}</button>
+                <span style="font-size:12px; color:#526; background:#eef3fb; padding:2px 6px; border-radius:6px;">{{ a.model }}</span>
+              </div>
+              <div v-if="agentMeta[a.name]?.expanded" style="margin-top:8px; display:grid; grid-template-columns: repeat(auto-fit, minmax(200px,1fr)); gap:8px;">
+                <div>
+                  <label>模型</label>
+                  <select v-model="agentMeta[a.name].edit.model" style="width:100%; padding:6px; border:1px solid #cfd6e4; border-radius:8px;">
+                    <option value="llama3.2:3b">llama3.2:3b</option>
+                    <option value="llama3.2:1b">llama3.2:1b</option>
+                    <option value="gemma:1b">gemma:1b</option>
+                    <option value="gemma:4b">gemma:4b</option>
+                    <option value="gemma3:4b">gemma3:4b</option>
+                    <option value="deepseek-r1:1.5b">deepseek-r1:1.5b</option>
+                    <option value="deepseek-r1:7b">deepseek-r1:7b</option>
+                    <option value="deepseek-r1:8b">deepseek-r1:8b</option>
+                  </select>
                 </div>
-                <div v-if="agentMeta[a.name]?.expanded" style="margin-top:8px; display:grid; grid-template-columns: repeat(auto-fit, minmax(200px,1fr)); gap:8px;">
-                  <div>
-                    <label>模型</label>
-                    <select v-model="agentMeta[a.name].edit.model" style="width:100%; padding:6px; border:1px solid #cfd6e4; border-radius:8px;">
-                      <option value="llama3.2:3b">llama3.2:3b</option>
-                      <option value="llama3.2:1b">llama3.2:1b</option>
-                      <option value="gemma:1b">gemma:1b</option>
-                      <option value="gemma:4b">gemma:4b</option>
-                      <option value="gemma3:4b">gemma3:4b</option>
-                      <option value="deepseek-r1:1.5b">deepseek-r1:1.5b</option>
-                      <option value="deepseek-r1:7b">deepseek-r1:7b</option>
-                      <option value="deepseek-r1:8b">deepseek-r1:8b</option>
-                    </select>
-                  </div>
-                  <div>
-                    <label>Temperature</label>
-                    <input v-model.number="agentMeta[a.name].edit.temperature" type="number" min="0" max="1.2" step="0.1" style="width:100%; padding:6px; border:1px solid #cfd6e4; border-radius:8px;">
-                  </div>
-                  <div style="grid-column: 1 / -1;">
-                    <label>系統提示詞</label>
-                    <textarea v-model="agentMeta[a.name].edit.system_prompt" style="width:100%; min-height:80px;"></textarea>
-                  </div>
-                  <div>
-                    <button type="button" @click="saveAgentConfig(a.name)">儲存設定</button>
-                  </div>
+                <div>
+                  <label>Temperature</label>
+                  <input v-model.number="agentMeta[a.name].edit.temperature" type="number" min="0" max="1.2" step="0.1" style="width:100%; padding:6px; border:1px solid #cfd6e4; border-radius:8px;">
                 </div>
-              </div>
-            </div>
-            <textarea v-model="chatInput" placeholder="輸入要詢問或比較的內容"></textarea>
-            <button style="margin-top:8px;" @click="runChat">💬 送出</button>
-            <div v-if="chatResult" style="margin-top:8px; padding:8px; border-radius:10px; border:1px solid #e3e7ef; background:#fafafa;">
-              <div><strong>策略：</strong>{{ chatResult.strategy_used }}</div>
-              <div style="margin-top:6px;" v-if="chatResult.payload?.final_result">
-                <div class="badge">Final</div>
-                <pre class="wrap">{{ chatResult.payload.final_result }}</pre>
-              </div>
-              <div style="margin-top:6px;" v-if="chatResult.payload?.result">
-                <div class="badge">Result</div>
-                <pre class="wrap">{{ chatResult.payload.result }}</pre>
-              </div>
-            </div>
-          </div>
-          <div style="grid-column: 1 / -1;">
-            <label><input type="checkbox" v-model="advancedUseCustom"> 使用自訂 Agent（獨立於現有清單）</label>
-          </div>
-          <div>
-            <label>自訂 Agent 名稱</label>
-            <input v-model="advancedCustomName" placeholder="__custom_adv_agent" style="width:100%; padding:6px; border:1px solid #cfd6e4; border-radius:8px;">
-          </div>
-          <div>
-            <label>自訂模型</label>
-            <select v-model="advancedModel" style="width:100%; padding:6px; border:1px solid #cfd6e4; border-radius:8px;">
-              <option value="llama3.2:3b">llama3.2:3b</option>
-              <option value="llama3.2:1b">llama3.2:1b</option>
-              <option value="gemma:1b">gemma:1b</option>
-              <option value="gemma:4b">gemma:4b</option>
-              <option value="gemma3:4b">gemma3:4b</option>
-              <option value="deepseek-r1:1.5b">deepseek-r1:1.5b</option>
-              <option value="deepseek-r1:7b">deepseek-r1:7b</option>
-              <option value="deepseek-r1:8b">deepseek-r1:8b</option>
-            </select>
-          </div>
-          <div>
-            <label>Temperature</label>
-            <input v-model.number="advancedTemp" type="number" min="0" max="1.2" step="0.1" style="width:100%; padding:6px; border:1px solid #cfd6e4; border-radius:8px;">
-          </div>
-          <div style="grid-column: 1 / -1;">
-            <label>自訂系統提示詞（會建立/更新自訂 Agent）</label>
-            <textarea v-model="advancedPrompt" style="width:100%; min-height:100px;" placeholder="為比對或聊天建立專用的系統提示詞"></textarea>
-          </div>
-          <div>
-            <button @click="ensureCustomAgent">建立新 Agent</button>
-          </div>
-          <div style="grid-column: 1 / -1; border-top:1px dashed #e3e7ef; padding-top:10px; margin-top:6px;">
-            <h4 style="margin:0 0 6px;">🔀 分支 / DAG (branched)</h4>
-            <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(240px,1fr)); gap:10px; align-items:end;">
-              <div>
-                <label>來源 Agent</label>
-                <select v-model="dagEdgeSrc" style="width:100%; padding:6px; border:1px solid #cfd6e4; border-radius:8px;">
-                  <option value="">選擇來源</option>
-                  <option v-for="a in agents" :key="'src-'+a.name" :value="a.name">{{ a.name }}</option>
-                </select>
-              </div>
-              <div>
-                <label>目標 Agent</label>
-                <select v-model="dagEdgeDst" style="width:100%; padding:6px; border:1px solid #cfd6e4; border-radius:8px;">
-                  <option value="">選擇目標</option>
-                  <option v-for="a in agents" :key="'dst-'+a.name" :value="a.name">{{ a.name }}</option>
-                </select>
-              </div>
-              <div>
-                <button type="button" @click="addDagEdge">➕ 新增邊</button>
-              </div>
-            </div>
-            <div style="margin:8px 0;">
-              <div>目前邊：</div>
-              <div v-if="dagEdges && dagEdges.length" style="display:flex; flex-direction:column; gap:6px; margin-top:4px;">
-                <div v-for="(e,idx) in dagEdges" :key="idx" style="display:flex; align-items:center; gap:8px; padding:6px 8px; border:1px solid #e3e7ef; border-radius:8px;">
-                  <span>{{ idx+1 }}. {{ e.src }} ➜ {{ e.dst }}</span>
-                  <button type="button" @click="removeDagEdge(idx)">🗑️</button>
+                <div style="grid-column: 1 / -1;">
+                  <label>系統提示詞</label>
+                  <textarea v-model="agentMeta[a.name].edit.system_prompt" style="width:100%; min-height:80px;"></textarea>
+                </div>
+                <div>
+                  <button type="button" @click="saveAgentConfig(a.name)">儲存設定</button>
                 </div>
               </div>
-              <div v-else style="color:#666; font-size:13px; margin-top:4px;">尚未新增邊</div>
             </div>
-            <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(240px,1fr)); gap:10px;">
-              <div>
-                <label>入口 Agent (可多選)</label>
-                <select multiple v-model="dagEntry" style="width:100%; padding:6px; border:1px solid #cfd6e4; border-radius:8px; min-height:88px;">
-                  <option v-for="a in agents" :key="'entry-'+a.name" :value="a.name">{{ a.name }}</option>
-                </select>
+          </div>
+        </div>
+        <div style="grid-column: 1 / -1;">
+          <label><input type="checkbox" v-model="advancedUseCustom"> 使用自訂 Agent（獨立於現有清單）</label>
+        </div>
+        <div>
+          <label>自訂 Agent 名稱</label>
+          <input v-model="advancedCustomName" placeholder="__custom_adv_agent" style="width:100%; padding:6px; border:1px solid #cfd6e4; border-radius:8px;">
+        </div>
+        <div>
+          <label>自訂模型</label>
+          <select v-model="advancedModel" style="width:100%; padding:6px; border:1px solid #cfd6e4; border-radius:8px;">
+            <option value="llama3.2:3b">llama3.2:3b</option>
+            <option value="llama3.2:1b">llama3.2:1b</option>
+            <option value="gemma:1b">gemma:1b</option>
+            <option value="gemma:4b">gemma:4b</option>
+            <option value="gemma3:4b">gemma3:4b</option>
+            <option value="deepseek-r1:1.5b">deepseek-r1:1.5b</option>
+            <option value="deepseek-r1:7b">deepseek-r1:7b</option>
+            <option value="deepseek-r1:8b">deepseek-r1:8b</option>
+          </select>
+        </div>
+        <div>
+          <label>Temperature</label>
+          <input v-model.number="advancedTemp" type="number" min="0" max="1.2" step="0.1" style="width:100%; padding:6px; border:1px solid #cfd6e4; border-radius:8px;">
+        </div>
+        <div style="grid-column: 1 / -1;">
+          <label>自訂系統提示詞（會建立/更新自訂 Agent）</label>
+          <textarea v-model="advancedPrompt" style="width:100%; min-height:100px;" placeholder="為比對或聊天建立專用的系統提示詞"></textarea>
+        </div>
+        <div>
+          <button @click="ensureCustomAgent">建立新 Agent</button>
+        </div>
+        <div style="grid-column: 1 / -1; border-top:1px dashed #e3e7ef; padding-top:10px; margin-top:6px;">
+          <h4 style="margin:0 0 6px;">🔀 分支 / DAG (branched)</h4>
+          <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(240px,1fr)); gap:10px; align-items:end;">
+            <div>
+              <label>來源 Agent</label>
+              <select v-model="dagEdgeSrc" style="width:100%; padding:6px; border:1px solid #cfd6e4; border-radius:8px;">
+                <option value="">選擇來源</option>
+                <option v-for="a in agents" :key="'src-'+a.name" :value="a.name">{{ a.name }}</option>
+              </select>
+            </div>
+            <div>
+              <label>目標 Agent</label>
+              <select v-model="dagEdgeDst" style="width:100%; padding:6px; border:1px solid #cfd6e4; border-radius:8px;">
+                <option value="">選擇目標</option>
+                <option v-for="a in agents" :key="'dst-'+a.name" :value="a.name">{{ a.name }}</option>
+              </select>
+            </div>
+            <div>
+              <button type="button" @click="addDagEdge">➕ 新增邊</button>
+            </div>
+          </div>
+          <div style="margin:8px 0;">
+            <div>目前邊：</div>
+            <div v-if="dagEdges && dagEdges.length" style="display:flex; flex-direction:column; gap:6px; margin-top:4px;">
+              <div v-for="(e,idx) in dagEdges" :key="idx" style="display:flex; align-items:center; gap:8px; padding:6px 8px; border:1px solid #e3e7ef; border-radius:8px;">
+                <span>{{ idx+1 }}. {{ e.src }} ➜ {{ e.dst }}</span>
+                <button type="button" @click="removeDagEdge(idx)">🗑️</button>
               </div>
-              <div>
-                <label>出口 Agent (結果輸出，可多選)</label>
-                <select multiple v-model="dagOutputs" style="width:100%; padding:6px; border:1px solid #cfd6e4; border-radius:8px; min-height:88px;">
-                  <option v-for="a in agents" :key="'out-'+a.name" :value="a.name">{{ a.name }}</option>
-                </select>
-              </div>
             </div>
-            <div style="margin-top:10px; display:flex; gap:10px; flex-wrap:wrap;">
-              <button type="button" @click="saveDag">💾 儲存 DAG</button>
-              <button type="button" @click="loadDag">⟳ 載入 DAG</button>
+            <div v-else style="color:#666; font-size:13px; margin-top:4px;">尚未新增邊</div>
+          </div>
+          <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(240px,1fr)); gap:10px;">
+            <div>
+              <label>入口 Agent (可多選)</label>
+              <select multiple v-model="dagEntry" style="width:100%; padding:6px; border:1px solid #cfd6e4; border-radius:8px; min-height:88px;">
+                <option v-for="a in agents" :key="'entry-'+a.name" :value="a.name">{{ a.name }}</option>
+              </select>
             </div>
-            <div style="margin-top:8px;">
-              <div class="badge">DAG 圖預覽</div>
-              <div class="mermaid dag-mermaid" style="background:#0c1116; color:#e6edf3; padding:8px; border-radius:8px; overflow:auto;" v-html="dagMermaidSvg"></div>
+            <div>
+              <label>出口 Agent (結果輸出，可多選)</label>
+              <select multiple v-model="dagOutputs" style="width:100%; padding:6px; border:1px solid #cfd6e4; border-radius:8px; min-height:88px;">
+                <option v-for="a in agents" :key="'out-'+a.name" :value="a.name">{{ a.name }}</option>
+              </select>
             </div>
+          </div>
+          <div style="margin-top:10px; display:flex; gap:10px; flex-wrap:wrap;">
+            <button type="button" @click="saveDag">💾 儲存 DAG</button>
+            <button type="button" @click="loadDag">⟳ 載入 DAG</button>
+          </div>
+          <div style="margin-top:8px;">
+            <div class="badge">DAG 圖預覽</div>
+            <div class="mermaid dag-mermaid" style="background:#0c1116; color:#e6edf3; padding:8px; border-radius:8px; overflow:auto;" v-html="dagMermaidSvg"></div>
           </div>
         </div>
       </div>
     </div>
   </div>
-
+</div>
   <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/konva@9/konva.min.js"></script>

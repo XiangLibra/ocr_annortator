@@ -204,6 +204,24 @@ function convertPipeTables(md) {
   return out.join("\n");
 }
 
+// 漸進式顯示 AI 回覆，模擬逐字輸出
+function typeOutMessage(msgRef, fullText, step = 3, interval = 25) {
+  if (!msgRef) return;
+  const chars = Array.from(fullText || "");
+  let idx = 0;
+  msgRef.text = "...";
+  msgRef.html = "";
+  const timer = setInterval(() => {
+    idx = Math.min(chars.length, idx + step);
+    msgRef.text = chars.slice(0, idx).join("");
+    msgRef.html = safeMarkdown(msgRef.text);
+    if (idx >= chars.length) {
+      clearInterval(timer);
+      msgRef.streaming = false;
+    }
+  }, interval);
+}
+
 // ---- helpers shared between components ----
 function stampOriginalOrder(items) {
   items.forEach(fr => {
@@ -753,6 +771,10 @@ createApp({
     const chatStrategy = ref("auto");
     const chatAgents = ref([]);
     const chatResult = ref(null);
+    const chatUseCompare = ref(true);
+    const chatContextNote = ref("");
+    const chatHistory = ref([]);
+    const chatSending = ref(false);
     const advancedOpen = ref(false);
     const advancedUseCustom = ref(true);
     const advancedCustomName = ref("__custom_adv_agent");
@@ -1055,14 +1077,43 @@ createApp({
       try {
         await ensureCustomAgent();
         const order = resolveOrder();
+        const ctx = {};
+        if (chatUseCompare.value && compareResult.value) {
+          ctx.compare_final = compareFinalText.value;
+          ctx.compare_files = comparePairs.value?.map(p => p.name) || [];
+        }
+        if (chatContextNote.value?.trim()) {
+          ctx.note = chatContextNote.value;
+        }
+        chatSending.value = true;
+
+        // 先把使用者訊息與待回覆的 AI 氣泡放上去，避免卡住看不到
+        const userMsg = { role: "user", text: chatInput.value };
+        const aiMsg = { role: "ai", text: "...", html: "", streaming: true };
+        chatHistory.value = [...chatHistory.value, userMsg, aiMsg];
+        const userInputBackup = chatInput.value;
+        chatInput.value = "";
+
         const res = await axios.post(apiBase.value + "/api/run", {
-          input_text: chatInput.value,
+          input_text: userInputBackup,
           strategy: chatStrategy.value,
           agents: order.length ? order : chatAgents.value,
+          context: Object.keys(ctx).length ? ctx : undefined,
         });
         chatResult.value = res.data;
+        const aiText = res.data?.payload?.final_result || res.data?.payload?.result || "";
+        typeOutMessage(aiMsg, aiText);
       } catch (e) {
+        // 回退剛剛的 AI 氣泡內容，提示失敗
+        const last = chatHistory.value[chatHistory.value.length - 1];
+        if (last && last.role === "ai") {
+          last.text = "⚠️ 執行失敗，請稍後再試";
+          last.html = "";
+          last.streaming = false;
+        }
         alert("執行失敗，請稍後再試");
+      } finally {
+        chatSending.value = false;
       }
     }
 
@@ -1242,6 +1293,9 @@ createApp({
       chatStrategy,
       chatAgents,
       chatResult,
+      chatUseCompare,
+      chatContextNote,
+      chatHistory,
       agentMeta,
       advancedOpen,
       advancedModel,
