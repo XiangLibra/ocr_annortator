@@ -4,6 +4,7 @@ backend/uploads/
 backend/output/
 backend/tess_training/
 ocr-annotator/
+output/
 app_streamlit.py
 venv/
 .env

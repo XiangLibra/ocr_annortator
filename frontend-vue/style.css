@@ -188,6 +188,28 @@ textarea {
   width: 100%;
   box-sizing: border-box;
 }
+.markdown table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 8px 0;
+}
+.markdown th,
+.markdown td {
+  border: 1px solid #d9e2ef;
+  padding: 8px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+.markdown th {
+  background: #eef3fb;
+  font-weight: 600;
+}
+.markdown tr:nth-child(even) td {
+  background: #f7faff;
+}
+.markdown table {
+  border: 1px solid #c5d0df;
+}
 .mermaid-preview {
   white-space: normal;
   overflow-x: auto;

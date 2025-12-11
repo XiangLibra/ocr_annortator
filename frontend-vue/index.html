@@ -81,9 +81,20 @@
           <button :disabled="compareLoading" style="margin-top:8px;" @click="compareFiles">🚀 比對文件</button>
           <div v-if="compareResult" style="margin-top:8px; padding:8px; border-radius:10px; border:1px solid #e3e7ef; background:#fafafa;">
             <div><strong>策略：</strong>{{ compareResult.strategy_used }}</div>
+            <div v-if="comparePairs.length === 2" style="margin-top:8px;">
+              <div class="badge">A / B 文件內容（目前選擇的前兩個）</div>
+              <div style="display:grid; grid-template-columns: repeat(auto-fit,minmax(240px,1fr)); gap:10px; margin-top:6px;">
+                <div v-for="(p,idx) in comparePairs" :key="idx" style="border:1px solid #e3e7ef; border-radius:10px; padding:8px; background:#fff;">
+                  <div style="font-weight:600; margin-bottom:4px;">{{ idx === 0 ? 'A' : 'B' }}：{{ p.name }}</div>
+                  <pre class="wrap" style="max-height:240px; overflow:auto;">{{ p.text }}</pre>
+                </div>
+              </div>
+            </div>
             <div style="margin-top:6px;" v-if="compareResult.payload?.final_result !== undefined || compareResult.payload?.result !== undefined">
-              <div style="display:flex; align-items:center; gap:8px; margin-bottom:8px;">
+              <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:8px;">
                 <div class="badge">AI 輸出</div>
+                <button type="button" @click="downloadCompare('docx')">⬇️ 下載 Word</button>
+                <button type="button" @click="downloadCompare('pdf')">⬇️ 下載 PDF</button>
                 <button type="button" @click="compareEditing = !compareEditing">{{ compareEditing ? "關閉編輯" : "📝 編輯" }}</button>
               </div>
               <div v-if="!compareEditing" class="markdown" v-html="compareRendered"></div>
@@ -273,7 +284,10 @@
   <script src="https://cdn.jsdelivr.net/npm/jszip@3/dist/jszip.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/diff@7/dist/diff.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.2/dist/purify.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
   <script src="/static/script.js"></script>
 </body>
 </html>

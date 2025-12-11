@@ -1,5 +1,209 @@
 const { createApp, ref, reactive, watch, computed, onMounted, onUnmounted, nextTick } = Vue;
 
+// Enable GFM tables and line breaks for marked, and keep default renderer methods
+let markedRenderer = null;
+if (window.marked?.setOptions) {
+  markedRenderer = new window.marked.Renderer();
+  markedRenderer.table = (header, body) => {
+    const h = typeof header === "string" ? header : (header?.text ?? "");
+    const b = typeof body === "string" ? body : (body?.text ?? "");
+    return `<table class="gh-table"><thead>${h}</thead><tbody>${b}</tbody></table>`;
+  };
+  window.marked.setOptions({
+    gfm: true,
+    breaks: true,
+    tables: true,
+    smartLists: true,
+    renderer: markedRenderer,
+  });
+}
+
+function safeMarkdown(html) {
+  const src = convertPipeTables((html || "").toString());
+  try {
+    return window.marked.parse(src, { renderer: markedRenderer });
+  } catch (e) {
+    console.error("markdown parse failed", e);
+    return src;
+  }
+}
+
+function normalizeText(val) {
+  if (typeof val === "string") return val;
+  if (val === null || val === undefined) return "";
+  try {
+    return JSON.stringify(val, null, 2);
+  } catch {
+    return String(val);
+  }
+}
+
+function wrapHtmlBody(body) {
+  return `
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <style>
+    body { font-family: "Arial","Helvetica","Noto Sans","Noto Sans TC","Microsoft JhengHei",sans-serif; white-space: pre-wrap; }
+    table { border-collapse: collapse; width: 100%; }
+    th, td { border: 1px solid #888; padding: 6px; vertical-align: top; }
+    th { background: #eef3fb; }
+  </style>
+</head>
+<body>${body}</body>
+</html>`;
+}
+
+async function buildDocxFromHtml(htmlContent) {
+  const html = wrapHtmlBody(htmlContent || "");
+  const zip = new JSZip();
+  zip.file(
+    "[Content_Types].xml",
+    `<?xml version="1.0" encoding="UTF-8"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+  <Override PartName="/word/afchunk.html" ContentType="application/xhtml+xml"/>
+</Types>`
+  );
+  zip.folder("_rels")?.file(
+    ".rels",
+    `<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
+</Relationships>`
+  );
+  zip.folder("word/_rels")?.file(
+    "document.xml.rels",
+    `<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rIdHtml" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/aFChunk" Target="afchunk.html"/>
+</Relationships>`
+  );
+  zip.folder("word")?.file(
+    "document.xml",
+    `<?xml version="1.0" encoding="UTF-8"?>
+<w:document xmlns:wpc="http://schemas.microsoft.com/office/word/2010/wordprocessingCanvas"
+ xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+ xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+ xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math"
+ xmlns:o="urn:schemas-microsoft-com:office:office"
+ xmlns:v="urn:schemas-microsoft-com:vml"
+ xmlns:wp14="http://schemas.microsoft.com/office/word/2010/wordprocessingDrawing"
+ xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"
+ xmlns:w10="urn:schemas-microsoft-com:office:word"
+ xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+ xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml"
+ xmlns:wpg="http://schemas.microsoft.com/office/word/2010/wordprocessingGroup"
+ xmlns:wpi="http://schemas.microsoft.com/office/word/2010/wordprocessingInk"
+ xmlns:wne="http://schemas.microsoft.com/office/2006/wordml"
+ xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape"
+ mc:Ignorable="w14 wp14">
+  <w:body>
+    <w:altChunk r:id="rIdHtml"/>
+    <w:sectPr>
+      <w:pgSz w:w="11906" w:h="16838"/>
+      <w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="720" w:footer="720" w:gutter="0"/>
+    </w:sectPr>
+  </w:body>
+</w:document>`
+  );
+  zip.folder("word")?.file("afchunk.html", html);
+  return zip.generateAsync({ type: "blob" });
+}
+
+function toPlainTextFromMarkdown(md) {
+  const div = document.createElement("div");
+  div.innerHTML = safeMarkdown(md);
+  return div.textContent || div.innerText || "";
+}
+
+function escapeXml(s) {
+  return (s || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&apos;");
+}
+
+async function buildDocxBlob(text) {
+  const zip = new JSZip();
+  zip.file(
+    "[Content_Types].xml",
+    `<?xml version="1.0" encoding="UTF-8"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+</Types>`
+  );
+  zip.folder("_rels")?.file(
+    ".rels",
+    `<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
+</Relationships>`
+  );
+  const paragraphs = (text || "").split(/\r?\n/).map(line => `<w:p><w:r><w:t>${escapeXml(line || "")}</w:t></w:r></w:p>`).join("");
+  zip.folder("word")?.file(
+    "document.xml",
+    `<?xml version="1.0" encoding="UTF-8"?>
+<w:document xmlns:wpc="http://schemas.microsoft.com/office/word/2010/wordprocessingCanvas"
+ xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+ xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+ xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math"
+ xmlns:o="urn:schemas-microsoft-com:office:office"
+ xmlns:v="urn:schemas-microsoft-com:vml"
+ xmlns:wp14="http://schemas.microsoft.com/office/word/2010/wordprocessingDrawing"
+ xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"
+ xmlns:w10="urn:schemas-microsoft-com:office:word"
+ xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+ xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml"
+ xmlns:wpg="http://schemas.microsoft.com/office/word/2010/wordprocessingGroup"
+ xmlns:wpi="http://schemas.microsoft.com/office/word/2010/wordprocessingInk"
+ xmlns:wne="http://schemas.microsoft.com/office/word/2006/wordml"
+ xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape"
+ mc:Ignorable="w14 wp14">
+  <w:body>
+    ${paragraphs}
+    <w:sectPr>
+      <w:pgSz w:w="11906" w:h="16838"/>
+      <w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="720" w:footer="720" w:gutter="0"/>
+    </w:sectPr>
+  </w:body>
+</w:document>`
+  );
+  return await zip.generateAsync({ type: "blob" });
+}
+
+// Fallback: convert pipe-style tables to HTML before marked 渲染，避免模型輸出未被解析
+function convertPipeTables(md) {
+  const lines = (md || "").split(/\r?\n/);
+  const out = [];
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const next = lines[i + 1] || "";
+    const isTableStart = /^\s*\|.*\|\s*$/.test(line) && /^\s*\|?\s*-[-\s|]+\|\s*$/.test(next);
+    if (isTableStart) {
+      // 解析表頭
+      const headerCells = line.split("|").map(s => s.trim()).filter(Boolean);
+      i++; // skip separator
+      const rows = [];
+      while (i + 1 < lines.length && /^\s*\|.*\|\s*$/.test(lines[i + 1])) {
+        i++;
+        const cells = lines[i].split("|").map(s => s.trim()).filter(Boolean);
+        rows.push(cells);
+      }
+      const headerHtml = headerCells.map(c => `<th>${c}</th>`).join("");
+      const bodyHtml = rows
+        .map(r => `<tr>${r.map(c => `<td>${c}</td>`).join("")}</tr>`)
+        .join("");
+      out.push(`<table class="gh-table"><thead><tr>${headerHtml}</tr></thead><tbody>${bodyHtml}</tbody></table>`);
+    } else {
+      out.push(line);
+    }
+  }
+  return out.join("\n");
+}
+
 // ---- helpers shared between components ----
 function stampOriginalOrder(items) {
   items.forEach(fr => {
@@ -531,7 +735,18 @@ createApp({
     const compareOriginalFinal = ref("");
     const compareEditedFinal = ref("");
     const compareEditing = ref(false);
-    const compareFinalText = computed(() => compareEditedFinal.value || compareOriginalFinal.value || "");
+    const compareFinalText = computed(() => normalizeText(compareEditedFinal.value || compareOriginalFinal.value || ""));
+    const comparePairs = computed(() => {
+      if (!compareSelected.value || compareSelected.value.length < 2) return [];
+      const ids = compareSelected.value.slice(0, 2);
+      return ids
+        .map(id => {
+          const fr = items.value.find(x => x.fileId === id);
+          if (!fr) return null;
+          return { name: fr.filename, text: buildAfterForDiff(fr) };
+        })
+        .filter(Boolean);
+    });
     const uploadedNames = ref([]);
     const dropHint = ref("拖曳檔案到此（最多 2 個 PDF/圖片），或點下方按鈕選擇");
     const chatInput = ref("");
@@ -546,7 +761,7 @@ createApp({
     const advancedPrompt = ref("");
     const advancedOrder = ref("文件摘要專家 - 差異分析專家 - 結構化分析專家");
     const compareDiffParts = computed(() => Diff.diffWordsWithSpace(compareOriginalFinal.value || "", compareEditedFinal.value || ""));
-    const compareRendered = computed(() => marked.parse((compareFinalText.value || "").trim()));
+    const compareRendered = computed(() => safeMarkdown((compareFinalText.value || "").trim()));
     const mermaidSvg = ref("");
     const dagEdges = ref([]);
     const dagEntry = ref([]);
@@ -902,6 +1117,99 @@ createApp({
       renderDagMermaid();
     }
 
+    function getCompareText() {
+      const payload = compareResult.value?.payload || {};
+      return normalizeText(payload.final_result || payload.result || "");
+    }
+
+    async function downloadCompare(type = "docx") {
+      const text = getCompareText();
+      if (!text.trim()) return alert("沒有可下載的內容");
+      const htmlBody = safeMarkdown(text);
+      const plain = toPlainTextFromMarkdown(text);
+
+      if (type === "pdf" && window.jspdf?.jsPDF) {
+        try {
+          const { jsPDF } = window.jspdf;
+          // 直接用 html2canvas 轉圖，避免字型缺失造成亂碼
+          if (window.html2canvas) {
+            const tmp = document.createElement("div");
+            tmp.style.position = "fixed";
+            tmp.style.left = "-9999px";
+            tmp.style.top = "0";
+            tmp.style.width = "800px";
+            tmp.innerHTML = wrapHtmlBody(htmlBody);
+            document.body.appendChild(tmp);
+            const canvas = await window.html2canvas(tmp, { scale: 2 });
+            document.body.removeChild(tmp);
+            const imgData = canvas.toDataURL("image/png");
+            const pdf = new jsPDF("p", "pt", "a4");
+            const pageWidth = pdf.internal.pageSize.getWidth();
+            const pageHeight = pdf.internal.pageSize.getHeight();
+            const imgWidth = pageWidth - 60;
+            const imgHeight = (canvas.height * imgWidth) / canvas.width;
+            let y = 30;
+            pdf.addImage(imgData, "PNG", 30, y, imgWidth, imgHeight);
+            pdf.save("compare_output.pdf");
+          } else {
+            // fallback 純文字
+            const doc = new jsPDF({ unit: "pt", format: "a4" });
+            let y = 40;
+            doc.setFont("helvetica", "normal");
+            doc.setFontSize(12);
+            plain.split(/\r?\n/).forEach(line => {
+              const wrapped = doc.splitTextToSize(line || " ", 500);
+              wrapped.forEach(part => {
+                if (y > 780) { doc.addPage(); y = 40; }
+                doc.text(part, 40, y);
+                y += 18;
+              });
+            });
+            doc.save("compare_output.pdf");
+          }
+          return;
+        } catch (err) {
+          console.error("pdf export failed", err);
+          // fallback 純文字
+          try {
+            const { jsPDF } = window.jspdf;
+            const doc = new jsPDF({ unit: "pt", format: "a4" });
+            let y = 40;
+            doc.setFont("helvetica", "normal");
+            doc.setFontSize(12);
+            plain.split(/\r?\n/).forEach(line => {
+              const wrapped = doc.splitTextToSize(line || " ", 500);
+              wrapped.forEach(part => {
+                if (y > 780) { doc.addPage(); y = 40; }
+                doc.text(part, 40, y);
+                y += 18;
+              });
+            });
+            doc.save("compare_output.pdf");
+            return;
+          } catch (fallbackErr) {
+            console.error("pdf fallback failed", fallbackErr);
+          }
+        }
+      }
+
+      // Word (docx via altChunk HTML)
+      buildDocxFromHtml(htmlBody).then(blob => {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = "compare_output.docx";
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+      });
+    }
+
+    function downloadComparePdf() {
+      downloadCompare("pdf");
+    }
+
     watch([dagEdges, dagEntry, dagOutputs], () => renderDagMermaid(), { deep: true });
     watch(mermaidPreview, () => renderMermaid(), { flush: "post", immediate: true });
     watch(advancedOpen, (v) => { if (v) { renderMermaid(); renderDagMermaid(); } }, { flush: "post" });
@@ -928,6 +1236,7 @@ createApp({
       compareFinalText,
       compareDiffParts,
       compareRendered,
+      comparePairs,
       mermaidSvg,
       chatInput,
       chatStrategy,
@@ -954,6 +1263,8 @@ createApp({
       renderMermaid,
       toggleAgent,
       saveAgentConfig,
+      downloadCompare,
+      downloadComparePdf,
       addDagEdge,
       dagEdgeDst,
       dagEdgeSrc,

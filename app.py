@@ -498,8 +498,11 @@ def compare_ocr(req: CompareOCRRequest):
         txt = record.get("correctedFullText") or record.get("fullText") or ""
         texts.append((record.get("filename", fid), txt))
 
-    # 組合 prompt
-    input_text = "請比較以下文件的差異與相似之處，並列出主要差異點：\n\n"
+    # 組合 prompt：要求同時提供 Markdown 表格摘要差異/相似
+    input_text = (
+        "請比較以下文件的差異與相似之處，並列出主要差異點。\n"
+        "請用 Markdown 表格摘要：欄位包含「項目」「文件1」「文件2」「差異/說明」。\n\n"
+    )
     for idx, (name, txt) in enumerate(texts, 1):
         input_text += f"--- 文件{idx}: {name} ---\n{txt}\n\n"
 
