@@ -523,12 +523,134 @@ createApp({
     const diffs = ref({});
     const exportReady = ref({});
     const fileInput = ref(null);
+    const agents = ref([]);
+    const agentMeta = reactive({});
+    const compareSelected = ref([]);
+    const compareResult = ref(null);
+    const compareLoading = ref(false);
+    const compareOriginalFinal = ref("");
+    const compareEditedFinal = ref("");
+    const compareEditing = ref(false);
+    const compareFinalText = computed(() => compareEditedFinal.value || compareOriginalFinal.value || "");
+    const uploadedNames = ref([]);
+    const dropHint = ref("拖曳檔案到此（最多 2 個 PDF/圖片），或點下方按鈕選擇");
+    const chatInput = ref("");
+    const chatStrategy = ref("auto");
+    const chatAgents = ref([]);
+    const chatResult = ref(null);
+    const advancedOpen = ref(false);
+    const advancedUseCustom = ref(true);
+    const advancedCustomName = ref("__custom_adv_agent");
+    const advancedModel = ref("gemma:1b");
+    const advancedTemp = ref(0.1);
+    const advancedPrompt = ref("");
+    const advancedOrder = ref("文件摘要專家 - 差異分析專家 - 結構化分析專家");
+    const compareDiffParts = computed(() => Diff.diffWordsWithSpace(compareOriginalFinal.value || "", compareEditedFinal.value || ""));
+    const compareRendered = computed(() => marked.parse((compareFinalText.value || "").trim()));
+    const mermaidSvg = ref("");
+    const dagEdges = ref([]);
+    const dagEntry = ref([]);
+    const dagOutputs = ref([]);
+    const dagEdgeSrc = ref("");
+    const dagEdgeDst = ref("");
+    const dagMermaidText = ref("");
+    const dagMermaidSvg = ref("");
+    let mermaidDagInited = false;
+    const mermaidPreview = computed(() => {
+      const steps = resolveOrder();
+      if (!steps.length) return "flowchart TD\n  A[未指定]";
+      if (steps.length === 1) return `flowchart TD\n  A["${steps[0]}"]`;
+      const nodes = steps.map((s, i) => `  A${i}["${s}"]`).join("\n");
+      const links = steps
+        .slice(0, -1)
+        .map((_, i) => `  A${i} --> A${i + 1}`)
+        .join("\n");
+      return `flowchart TD\n${nodes}\n${links}`;
+    });
 
-    async function handleUpload() {
-      if (!fileInput.value || !fileInput.value.files.length) return;
+    let mermaidInited = false;
+    function renderMermaid() {
+      if (!window.mermaid) return;
+      nextTick(async () => {
+        try {
+          if (!mermaidInited) {
+            window.mermaid.initialize({ startOnLoad: false, theme: "neutral", securityLevel: "loose" });
+            mermaidInited = true;
+          }
+          const id = `m-${Date.now()}`;
+          const { svg } = await window.mermaid.render(id, mermaidPreview.value);
+          mermaidSvg.value = svg;
+        } catch (e) {
+          console.error(e);
+        }
+      });
+    }
+
+    function buildDagMermaidText() {
+      const lines = ["flowchart LR", "  START([入口])"];
+      const idMap = new Map();
+      const getId = (name) => {
+        if (idMap.has(name)) return idMap.get(name);
+        const id = `N${idMap.size}`;
+        idMap.set(name, id);
+        return id;
+      };
+      const allNames = new Set();
+      (dagEntry.value || []).forEach(n => allNames.add(n));
+      (dagOutputs.value || []).forEach(n => allNames.add(n));
+      (dagEdges.value || []).forEach(e => { allNames.add(e.src); allNames.add(e.dst); });
+      allNames.forEach(n => {
+        const id = getId(n);
+        lines.push(`  ${id}["${n}"]`);
+      });
+      (dagEntry.value || []).forEach(e => {
+        const id = getId(e);
+        lines.push(`  START --> ${id}`);
+      });
+      (dagEdges.value || []).forEach(e => {
+        const src = getId(e.src);
+        const dst = getId(e.dst);
+        lines.push(`  ${src} --> ${dst}`);
+      });
+      if (dagOutputs.value?.length) lines.push("  END([出口])");
+      (dagOutputs.value || []).forEach(o => {
+        const id = getId(o);
+        lines.push(`  ${id} --> END`);
+      });
+      if (lines.length === 2) {
+        lines.push('  EMPTY["尚未新增邊"]');
+        lines.push("  START --> EMPTY");
+      }
+      return lines.join("\n");
+    }
+
+    async function renderDagMermaid(text) {
+      if (!window.mermaid) return;
+      const source = text || buildDagMermaidText();
+      dagMermaidText.value = source;
+      nextTick(async () => {
+        try {
+          if (!mermaidDagInited) {
+            window.mermaid.initialize({ startOnLoad: false, theme: "neutral", securityLevel: "loose" });
+            mermaidDagInited = true;
+          }
+          const { svg } = await window.mermaid.render(`dag-${Date.now()}`, source);
+          dagMermaidSvg.value = svg;
+        } catch (e) {
+          console.error(e);
+          dagMermaidSvg.value = `<pre style="color:#fff;">${source}</pre>`;
+        }
+      });
+    }
+
+    async function processFiles(fileList) {
+      const files = Array.from(fileList || []);
+      if (!files.length) return;
+      if (files.length > 2) return alert("一次最多上傳 2 個檔案");
       const data = new FormData();
-      for (const f of fileInput.value.files) data.append("files", f);
+      files.forEach(f => data.append("files", f));
       data.append("language", language.value);
+      uploadedNames.value = files.map(f => f.name);
       loading.value = true;
       try {
         const res = await axios.post(apiBase.value + "/api/ocr", data);
@@ -544,8 +666,22 @@ createApp({
         items.value = list;
         diffs.value = initialDiffs;
         exportReady.value = {};
+        // 預設勾選前兩個檔案以便快速比對
+        autoSelectFirstTwo(list);
       } finally {
         loading.value = false;
+      }
+    }
+
+    async function handleUpload() {
+      if (!fileInput.value || !fileInput.value.files.length) return;
+      await processFiles(fileInput.value.files);
+    }
+
+    async function handleDrop(e) {
+      e.preventDefault();
+      if (e.dataTransfer?.files?.length) {
+        await processFiles(e.dataTransfer.files);
       }
     }
 
@@ -582,6 +718,196 @@ createApp({
       await downloadZip(fr);
     }
 
+    async function fetchAgents() {
+      try {
+        const res = await axios.get(apiBase.value + "/api/agents");
+        agents.value = res.data || [];
+        (agents.value || []).forEach(a => {
+          if (!agentMeta[a.name]) {
+            agentMeta[a.name] = {
+              expanded: false,
+              edit: {
+                model: a.model,
+                temperature: a.temperature,
+                system_prompt: a.system_prompt
+              }
+            };
+          } else {
+            agentMeta[a.name].edit.model = a.model;
+            agentMeta[a.name].edit.temperature = a.temperature;
+            agentMeta[a.name].edit.system_prompt = a.system_prompt;
+          }
+        });
+      } catch (e) {
+        console.error(e);
+      }
+    }
+
+    function toggleAgent(name) {
+      if (!agentMeta[name]) {
+        agentMeta[name] = { expanded: false, edit: { model: "llama3.2:3b", temperature: 0.1, system_prompt: "" } };
+      }
+      agentMeta[name].expanded = !agentMeta[name].expanded;
+    }
+
+    async function saveAgentConfig(name) {
+      const meta = agentMeta[name];
+      if (!meta) return;
+      try {
+        await axios.put(apiBase.value + `/api/agents/${encodeURIComponent(name)}`, {
+          model: meta.edit.model,
+          temperature: meta.edit.temperature,
+          system_prompt: meta.edit.system_prompt
+        });
+        await fetchAgents();
+        alert(`已更新 ${name}`);
+      } catch (e) {
+        alert("更新失敗，請稍後再試");
+      }
+    }
+
+    function resolveOrder() {
+      const text = advancedOrder.value || "";
+      const parts = text
+        .split(/->|,|-/)
+        .map(s => s.trim())
+        .filter(Boolean);
+      if (advancedUseCustom.value && advancedPrompt.value.trim()) {
+        const customName = advancedCustomName.value || "__custom_adv_agent";
+        if (!parts.includes(customName)) parts.unshift(customName);
+      }
+      return parts;
+    }
+
+    async function ensureCustomAgent() {
+      if (!advancedUseCustom.value || !advancedPrompt.value.trim()) return;
+      const name = advancedCustomName.value || "__custom_adv_agent";
+      try {
+        if (agents.value.find(a => a.name === name)) {
+          await axios.put(apiBase.value + `/api/agents/${encodeURIComponent(name)}`, {
+            system_prompt: advancedPrompt.value,
+            model: advancedModel.value,
+            temperature: advancedTemp.value
+          });
+        } else {
+          await axios.post(apiBase.value + "/api/agents", {
+            name,
+            system_prompt: advancedPrompt.value,
+            model: advancedModel.value,
+            temperature: advancedTemp.value
+          });
+        }
+        await fetchAgents();
+      } catch (e) {
+        console.error(e);
+      }
+    }
+
+    async function compareFiles() {
+      if (compareSelected.value.length < 2) return alert("請至少選兩個 OCR 檔案");
+      await ensureCustomAgent();
+      compareLoading.value = true;
+      try {
+        const overrides = compareSelected.value
+          .map(id => {
+            const fr = items.value.find(x => x.fileId === id);
+            if (!fr) return null;
+            const txt = buildAfterForDiff(fr);
+            return { fileId: fr.fileId, filename: fr.filename, text: txt };
+          })
+          .filter(Boolean);
+
+        const res = await axios.post(apiBase.value + "/api/compare_ocr", {
+          fileIds: compareSelected.value,
+          overrides,
+          agents: resolveOrder(),
+          strategy: chatStrategy.value
+        });
+        compareResult.value = res.data;
+        const finalTxt = res.data?.payload?.final_result ?? res.data?.payload?.result ?? "";
+        compareOriginalFinal.value = finalTxt;
+        compareEditedFinal.value = compareOriginalFinal.value;
+        compareEditing.value = false;
+      } catch (e) {
+        alert("比對失敗，請稍後再試");
+      } finally {
+        compareLoading.value = false;
+      }
+    }
+
+    async function runChat() {
+      if (!chatInput.value.trim()) return alert("請輸入內容");
+      try {
+        await ensureCustomAgent();
+        const order = resolveOrder();
+        const res = await axios.post(apiBase.value + "/api/run", {
+          input_text: chatInput.value,
+          strategy: chatStrategy.value,
+          agents: order.length ? order : chatAgents.value,
+        });
+        chatResult.value = res.data;
+      } catch (e) {
+        alert("執行失敗，請稍後再試");
+      }
+    }
+
+    watch(apiBase, () => {
+      fetchAgents();
+    });
+    function autoSelectFirstTwo(list) {
+      const arr = list || [];
+      if (!arr.length) return;
+      compareSelected.value = arr.slice(0, 2).map(f => f.fileId);
+    }
+    async function loadDag() {
+      try {
+        const res = await axios.get(apiBase.value + "/api/dag");
+        dagEdges.value = (res.data?.edges || []).map(e => ({ src: e[0], dst: e[1] }));
+        dagEntry.value = res.data?.entry || [];
+        dagOutputs.value = res.data?.outputs || [];
+        await renderDagMermaid(res.data?.mermaid);
+      } catch (e) {
+        console.error(e);
+      }
+    }
+
+    async function saveDag() {
+      const payload = {
+        edges: dagEdges.value.map(e => [e.src, e.dst]),
+        entry: dagEntry.value,
+        outputs: dagOutputs.value
+      };
+      try {
+        const res = await axios.put(apiBase.value + "/api/dag", payload);
+        await renderDagMermaid(res.data?.mermaid);
+        alert("DAG 已儲存");
+      } catch (e) {
+        alert("儲存 DAG 失敗");
+      }
+    }
+
+    function addDagEdge() {
+      if (!dagEdgeSrc.value || !dagEdgeDst.value) return;
+      const exists = dagEdges.value.some(e => e.src === dagEdgeSrc.value && e.dst === dagEdgeDst.value);
+      if (exists) return;
+      dagEdges.value = [...dagEdges.value, { src: dagEdgeSrc.value, dst: dagEdgeDst.value }];
+      dagEdgeSrc.value = "";
+      dagEdgeDst.value = "";
+      renderDagMermaid();
+    }
+
+    function removeDagEdge(idx) {
+      dagEdges.value.splice(idx, 1);
+      dagEdges.value = [...dagEdges.value];
+      renderDagMermaid();
+    }
+
+    watch([dagEdges, dagEntry, dagOutputs], () => renderDagMermaid(), { deep: true });
+    watch(mermaidPreview, () => renderMermaid(), { flush: "post", immediate: true });
+    watch(advancedOpen, (v) => { if (v) { renderMermaid(); renderDagMermaid(); } }, { flush: "post" });
+    onMounted(() => { renderMermaid(); loadDag(); });
+    fetchAgents();
+
     return {
       apiBase,
       language,
@@ -590,10 +916,55 @@ createApp({
       diffs,
       exportReady,
       fileInput,
+      uploadedNames,
+      dropHint,
+      agents,
+      compareSelected,
+      compareResult,
+      compareLoading,
+      compareOriginalFinal,
+      compareEditedFinal,
+      compareEditing,
+      compareFinalText,
+      compareDiffParts,
+      compareRendered,
+      mermaidSvg,
+      chatInput,
+      chatStrategy,
+      chatAgents,
+      chatResult,
+      agentMeta,
+      advancedOpen,
+      advancedModel,
+      advancedCustomName,
+      advancedUseCustom,
+      advancedTemp,
+      advancedPrompt,
+      advancedOrder,
+      mermaidPreview,
       handleUpload,
+      handleDrop,
       handleSave,
       handleDownload,
-      updateDiff
+      updateDiff,
+      compareFiles,
+      runChat,
+      ensureCustomAgent,
+      resolveOrder,
+      renderMermaid,
+      toggleAgent,
+      saveAgentConfig,
+      addDagEdge,
+      dagEdgeDst,
+      dagEdgeSrc,
+      dagEdges,
+      dagEntry,
+      dagOutputs,
+      removeDagEdge,
+      saveDag,
+      loadDag,
+      dagMermaidText,
+      dagMermaidSvg
     };
   }
 }).mount("#app");

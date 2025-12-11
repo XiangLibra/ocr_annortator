@@ -1,0 +1,235 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Multi-Agent OCR Backend (Vue CDN)</title>
+  <link rel="stylesheet" href="https://unpkg.com/modern-css-reset/dist/reset.min.css">
+  <style>
+    body { font-family: "Segoe UI","PingFang TC","Noto Sans TC",sans-serif; background:#f5f7fb; color:#1f1f1f; margin:0; }
+    .shell { max-width: 1200px; margin: 0 auto; padding: 20px 16px 48px; }
+    header { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:16px; }
+    h1 { margin:0; font-size:22px; }
+    .card { background:#fff; border:1px solid #e3e7ef; border-radius:12px; padding:14px; box-shadow:0 6px 18px rgba(16,30,54,0.06); margin-bottom:14px; }
+    input, select, button, textarea { font:inherit; }
+    button { cursor:pointer; border:1px solid #cfd6e4; background:linear-gradient(180deg,#fdfefe,#eef3fb); border-radius:10px; padding:8px 12px; transition:all .15s ease; }
+    button:hover { border-color:#9fb4dc; box-shadow:0 6px 16px rgba(76,119,187,.15); }
+    button:disabled { opacity:.6; cursor:not-allowed; box-shadow:none; }
+    textarea { width:100%; border-radius:10px; border:1px solid #cfd6e4; padding:8px; box-sizing:border-box; min-height:120px; }
+    .grid { display:grid; grid-template-columns: repeat(auto-fit,minmax(260px,1fr)); gap:12px; }
+    .list { border:1px solid #e3e7ef; border-radius:10px; padding:10px; background:#fff; }
+    .badge { display:inline-block; padding:2px 8px; border-radius:6px; background:#eef3fb; border:1px solid #d6ddea; color:#244; font-size:12px; }
+    pre { background:#0c1116; color:#e6edf3; padding:10px; border-radius:10px; overflow:auto; }
+    .diff { white-space:pre-wrap; word-break:break-word; line-height:1.6; }
+    .diff span.add { background:#e6ffed; color:#22863a; border-radius:4px; padding:0 2px; }
+    .diff span.del { background:#ffeef0; color:#cb2431; text-decoration:line-through; border-radius:4px; padding:0 2px; }
+    .wrap { white-space: pre-wrap; word-break: break-word; }
+    .markdown { background:#0c1116; color:#e6edf3; padding:10px; border-radius:10px; white-space:pre-wrap; word-break:break-word; }
+  </style>
+</head>
+<body>
+  <div id="app" class="shell">
+    <header>
+      <h1>🤖 Multi-Agent OCR Backend</h1>
+      <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+        <label>API 位址</label>
+        <input v-model="apiBase" style="width:260px; padding:6px 8px; border:1px solid #cfd6e4; border-radius:8px;">
+      </div>
+    </header>
+
+    <div class="card">
+      <h3 style="margin:0 0 8px;">✏️ 建立 / 更新 Agent</h3>
+      <div class="grid">
+        <div class="list">
+          <h4 style="margin:0 0 6px;">新增 Agent</h4>
+          <input v-model="form.name" placeholder="名稱" style="width:100%; margin-bottom:6px; padding:6px; border:1px solid #cfd6e4; border-radius:8px;">
+          <input v-model="form.model" placeholder="模型 (llama3.2:3b...)" style="width:100%; margin-bottom:6px; padding:6px; border:1px solid #cfd6e4; border-radius:8px;">
+          <input v-model.number="form.temperature" type="number" step="0.1" min="0" max="1.2" placeholder="temperature" style="width:100%; margin-bottom:6px; padding:6px; border:1px solid #cfd6e4; border-radius:8px;">
+          <textarea v-model="form.prompt" placeholder="系統提示詞"></textarea>
+          <button style="margin-top:8px;" @click="createAgent">建立 Agent</button>
+        </div>
+        <div class="list">
+          <h4 style="margin:0 0 6px;">Router / Evaluator Prompt</h4>
+          <label>Router</label>
+          <textarea v-model="routerPrompt" style="min-height:80px;"></textarea>
+          <label style="margin-top:6px; display:block;">Evaluator</label>
+          <textarea v-model="evaluatorPrompt" style="min-height:80px;"></textarea>
+          <button style="margin-top:8px;" @click="savePrompts">保存 Prompt</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3 style="margin:0 0 8px;">📋 Agents</h3>
+      <div style="display:flex; flex-wrap:wrap; gap:8px;">
+        <div v-for="a in agents" :key="a.name" class="list" style="min-width:260px;">
+          <div style="display:flex; justify-content:space-between; align-items:center; gap:6px;">
+            <strong>{{ a.name }}</strong>
+            <span class="badge">{{ a.model }} · temp {{ a.temperature }}</span>
+          </div>
+          <div style="margin:6px 0; color:#3b4148; white-space:pre-wrap; word-break:break-word;">{{ a.system_prompt }}</div>
+          <button @click="removeAgent(a.name)" style="background:#ffeef0; border-color:#f5c2c7; color:#a61b29;">刪除</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3 style="margin:0 0 8px;">🧠 執行</h3>
+      <div class="grid">
+        <div class="list">
+          <label>策略</label>
+          <select v-model="run.strategy" style="width:100%; padding:6px; border:1px solid #cfd6e4; border-radius:8px; margin-bottom:6px;">
+            <option value="auto">auto (router 決定)</option>
+            <option value="single">single</option>
+            <option value="parallel">parallel</option>
+            <option value="sequential">sequential</option>
+          </select>
+          <label>選擇 Agent（單/並行/序列用，留空=全部/路由決定）</label>
+          <div style="display:flex; flex-wrap:wrap; gap:6px;">
+            <label v-for="a in agents" :key="a.name" style="display:flex; gap:4px; align-items:center;">
+              <input type="checkbox" :value="a.name" v-model="run.selectedAgents"> {{ a.name }}
+            </label>
+          </div>
+        </div>
+        <div class="list">
+          <label>輸入內容</label>
+          <textarea
+            v-model="run.text"
+            placeholder="例：比較文件A與B的差異，列出主要變化並給出結論。或：請摘要這兩份報告並指出矛盾之處。"
+          ></textarea>
+          <label style="margin-top:6px;">Context (JSON，可空)</label>
+          <textarea v-model="run.context" placeholder='{"meta":"info"}' style="min-height:80px;"></textarea>
+          <button style="margin-top:8px;" @click="execute" :disabled="loading">執行</button>
+        </div>
+      </div>
+      <div v-if="result" style="margin-top:12px;">
+        <div class="list">
+          <div class="wrap"><strong>策略：</strong> {{ result.strategy_used }} | <strong>決策：</strong> {{ result.decision }}</div>
+          <div v-if="result.payload.final_result !== undefined || result.payload.result !== undefined" style="margin:8px 0;">
+            <div class="badge">Final / Result</div>
+            <div style="display:flex; align-items:center; gap:8px; margin:6px 0;">
+              <span>AI 輸出</span>
+              <button type="button" @click="editingFinal = !editingFinal">{{ editingFinal ? "關閉編輯" : "📝 編輯" }}</button>
+            </div>
+            <div class="markdown" v-html="renderedFinal"></div>
+            <div v-if="editingFinal" style="margin-top:8px;">
+              <textarea v-model="editedFinal" style="min-height:140px;"></textarea>
+              <div class="badge" style="margin-top:6px;">差異 Diff</div>
+              <pre class="diff">
+<template v-for="(p,idx) in finalDiffParts" :key="idx">
+  <span v-if="p.added" class="add">{{ p.value }}</span>
+  <span v-else-if="p.removed" class="del">{{ p.value }}</span>
+  <span v-else>{{ p.value }}</span>
+</template>
+              </pre>
+            </div>
+          </div>
+          <div v-if="result.payload.individual_results">
+            <div class="badge">Individual</div>
+            <div v-for="(v,k) in result.payload.individual_results" :key="k" class="list" style="margin-top:6px;">
+              <strong>{{ k }}</strong>
+              <pre>{{ v }}</pre>
+            </div>
+          </div>
+          <div v-if="result.payload.steps">
+            <div class="badge">Sequential Steps</div>
+            <div v-for="(s,idx) in result.payload.steps" :key="idx" class="list" style="margin-top:6px;">
+              <strong>{{ s.agent }}</strong>
+              <div>Input:</div>
+              <pre>{{ s.input }}</pre>
+              <div>Output:</div>
+              <pre>{{ s.output }}</pre>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/diff@7/dist/diff.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <script>
+    const { createApp, ref, computed } = Vue;
+    createApp({
+      setup() {
+        const apiBase = ref(location.origin);
+        const agents = ref([]);
+        const routerPrompt = ref("");
+        const evaluatorPrompt = ref("");
+        const form = ref({ name:"", model:"llama3.2:3b", temperature:0.1, prompt:"" });
+        const run = ref({ strategy:"auto", selectedAgents:[], text:"", context:"" });
+        const result = ref(null);
+        const loading = ref(false);
+        const originalFinal = ref("");
+        const editedFinal = ref("");
+        const editingFinal = ref(false);
+
+        const finalDiffParts = computed(() => Diff.diffWordsWithSpace(originalFinal.value || "", editedFinal.value || ""));
+        const renderedFinal = computed(() => marked.parse(((editedFinal.value || originalFinal.value || "")).trim()));
+
+        async function fetchAgents() {
+          const res = await axios.get(apiBase.value + "/api/agents");
+          agents.value = res.data;
+        }
+        async function fetchPrompts() {
+          const res = await axios.get(apiBase.value + "/api/router_prompt");
+          routerPrompt.value = res.data.router_prompt || "";
+          evaluatorPrompt.value = res.data.evaluator_prompt || "";
+        }
+        async function createAgent() {
+          if (!form.value.name || !form.value.prompt) return alert("請填名稱與提示詞");
+          await axios.post(apiBase.value + "/api/agents", {
+            name: form.value.name,
+            system_prompt: form.value.prompt,
+            model: form.value.model,
+            temperature: form.value.temperature
+          });
+          form.value = { name:"", model:"llama3.2:3b", temperature:0.1, prompt:"" };
+          fetchAgents();
+        }
+        async function removeAgent(name) {
+          if (!confirm(`刪除 ${name}?`)) return;
+          await axios.delete(apiBase.value + "/api/agents/" + encodeURIComponent(name));
+          fetchAgents();
+        }
+        async function savePrompts() {
+          await axios.put(apiBase.value + "/api/router_prompt", {
+            router_prompt: routerPrompt.value,
+            evaluator_prompt: evaluatorPrompt.value
+          });
+          alert("已更新");
+        }
+        async function execute() {
+          if (!run.value.text.trim()) return alert("請輸入內容");
+          loading.value = true;
+          try {
+            let ctx = undefined;
+            if (run.value.context && run.value.context.trim()) {
+              try { ctx = JSON.parse(run.value.context); } catch { alert("Context 不是合法 JSON"); loading.value=false; return; }
+            }
+            const res = await axios.post(apiBase.value + "/api/run", {
+              input_text: run.value.text,
+              strategy: run.value.strategy,
+              agents: run.value.selectedAgents,
+              context: ctx
+            });
+            result.value = res.data;
+            originalFinal.value = res.data?.payload?.final_result ?? res.data?.payload?.result ?? "";
+            editedFinal.value = originalFinal.value;
+            editingFinal.value = false;
+          } finally {
+            loading.value = false;
+          }
+        }
+
+        fetchAgents(); fetchPrompts();
+        return { apiBase, agents, routerPrompt, evaluatorPrompt, form, run, result, loading,
+                 createAgent, removeAgent, savePrompts, execute,
+                 originalFinal, editedFinal, editingFinal, finalDiffParts, renderedFinal };
+      }
+    }).mount("#app");
+  </script>
+</body>
+</html>

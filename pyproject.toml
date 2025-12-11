@@ -1,0 +1,33 @@
+[project]
+name = "OCRInsight-LLM-match"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = "==3.10.*"
+dependencies = [
+    "easyocr>=1.7.2",
+    "fastapi>=0.116.1",
+    "flask>=3.1.1",
+    "flask-cors>=6.0.1",
+    "gdown>=5.2.0",
+    "graphviz>=0.20.3",
+    "langchain>=0.3.25",
+    "langchain-community>=0.3.24",
+    "langchain-ollama>=0.3.3",
+    "numpy>=2.2.6",
+    "ollama>=0.4.8",
+    "opencv-python>=4.11.0.86",
+    "paddleocr>=2.10.0",
+    "paddlepaddle-gpu>=2.6.2",
+    "pillow>=11.2.1",
+    "plotly>=6.1.2",
+    "pymupdf>=1.25.5",
+    "pytesseract>=0.3.13",
+    "python-doctr[torch]>=0.11.0",
+    "python-docx>=1.1.2",
+    "python-multipart>=0.0.20",
+    "reportlab>=4.4.1",
+    "streamlit>=1.45.1",
+    "uvicorn>=0.35.0",
+    "torch>=2.7.0",
+]

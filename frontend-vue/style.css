@@ -66,6 +66,12 @@ button:disabled {
   padding: 14px;
   box-shadow: 0 4px 14px rgba(16, 30, 54, 0.04);
 }
+.file-body {
+  margin-top: 8px;
+  max-height: 640px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
 .page-card {
   margin-top: 12px;
   border: 1px dashed #d7deeb;
@@ -129,12 +135,17 @@ textarea {
 .text-diff {
   white-space: pre-wrap;
   word-break: break-word;
+  overflow-wrap: anywhere;
+  width: 100%;
+  box-sizing: border-box;
+  overflow-x: auto;
   background: #fff;
   border: 1px solid #e3e7ef;
   border-radius: 10px;
   padding: 10px;
   line-height: 1.6;
   color: #000;
+  min-height: 120px;
 }
 /* GitHub-like diff */
 .gh-diff {
@@ -160,6 +171,65 @@ textarea {
 .gh-inline-ctx {
   color: #24292e;
 }
+.wrap {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.markdown {
+  background: #f8fbff;
+  color: #1f2d3d;
+  padding: 12px;
+  border-radius: 10px;
+  border: 1px solid #d9e2ef;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: break-word;
+  overflow-x: auto;
+  width: 100%;
+  box-sizing: border-box;
+}
+.mermaid-preview {
+  white-space: normal;
+  overflow-x: auto;
+}
+.edit-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 18px;
+  align-items: stretch;
+  width: 100%;
+}
+@media (max-width: 1024px) {
+  .edit-grid {
+    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  }
+}
+.edit-cell {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  width: 100%;
+}
+.edit-textarea {
+  min-height: 360px;
+  height: 100%;
+  width: 100%;
+}
+.edit-preview {
+  min-height: 360px;
+  height: 100%;
+  width: 100%;
+}
+.edit-diff {
+  grid-column: 1 / -1;
+  width: 100%;
+}
+.full-diff {
+  width: 100%;
+  box-sizing: border-box;
+  overflow-wrap: anywhere;
+  overflow-x: auto;
+}
 .api-field {
   display: flex;
   gap: 8px;
@@ -173,4 +243,13 @@ textarea {
   border-radius: 8px;
   border: 1px solid #cfd6e4;
   padding: 6px 8px;
+}
+.badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 6px;
+  background: #eef3fb;
+  border: 1px solid #d6ddea;
+  color: #244;
+  font-size: 12px;
 }
