@@ -42,10 +42,6 @@ OCRInsight-LLM-match/
 
 ### 🧱 Step 1. 後端（FastAPI + uv）
 
-進入 `backend` 目錄：
-```bash
-cd backend
-```
 
 
 1️⃣ 安裝 uv
@@ -62,6 +58,8 @@ uv --version
 
 ```
 
+
+
 2️⃣ 初始化與安裝依賴
 
 ```bash
@@ -77,9 +75,13 @@ uv python install 3.10
 ```bash
 uv add fastapi uvicorn python-multipart pillow pytesseract
 ```
+或是直接同步環境就好
+```bash
+uv sync
+```
 3️⃣ 啟動後端伺服器
 ```bash
-uv run uvicorn api:app --reload --port 8000
+uv run uvicorn app:app --reload --port 8000
 ```
 
 後端將運行於：
@@ -96,19 +98,7 @@ sudo apt install tesseract-ocr
 sudo apt install tesseract-ocr-chi-tra   # 繁體中文語言包
 ```
 
-💻 Step 2. 前端（React + Vite）
 
-進入前端資料夾：
-```bash
-cd ocr-annotator
-npm install
-npm run dev
-
-```
-
-前端預設運行在：
-
-http://127.0.0.1:5173
 
 ### 🟢 新前端：Vue + CDN（免建置）
 
@@ -126,53 +116,3 @@ http://127.0.0.1:5173
 3. 頁面右上角可調整 API 位址，預設指向 `http://127.0.0.1:8000`。
 
 功能與 React 版一致：上傳 PDF/影像進行 OCR、檢視/編輯紅框文字、拖曳與縮放框線、加入新框、儲存修正、查看差異與下載包含 TXT+影像的 ZIP 匯出。
-
-🌉 前後端連線設定
-🔹 Vite 代理設定
-
-在 ocr-annotator/vite.config.ts 加入：
-```bash
-export default defineConfig({
-  server: {
-    proxy: {
-      '/api': 'http://127.0.0.1:8000', // 將 /api 開頭的請求轉發至後端
-    },
-  },
-})
-
-```
-
-
-🔹 FastAPI CORS 設定
-
-在 backend/api.py 中加入：
-```bash
-from fastapi.middleware.cors import CORSMiddleware
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # 或指定 http://127.0.0.1:5173
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-```
-🧩 Step 3. 一鍵啟動（開發用）
-
-可在專案根目錄建立 start.sh：
-```bash
-#!/bin/bash
-echo "🚀 啟動 FastAPI 後端..."
-cd backend
-uv run uvicorn api:app --reload --port 8000 &
-sleep 3
-echo "💻 啟動前端 Vite..."
-cd ../ocr-annotator
-npm run dev
-```
-
-執行：
-```bash
-bash start.sh
-```
