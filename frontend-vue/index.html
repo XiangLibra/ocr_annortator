@@ -286,13 +286,42 @@
               </select>
             </div>
           </div>
-          <div style="margin-top:10px; display:flex; gap:10px; flex-wrap:wrap;">
-            <button type="button" @click="saveDag">💾 儲存 DAG</button>
-            <button type="button" @click="loadDag">⟳ 載入 DAG</button>
-          </div>
+            <div style="margin-top:10px; display:flex; gap:10px; flex-wrap:wrap; align-items:center;">
+              <div style="flex:1; min-width:200px;">
+                <label>DAG 名稱</label>
+                <input v-model="dagSaveName" placeholder="例如：研究流程 A" style="width:100%; padding:6px; border:1px solid #cfd6e4; border-radius:8px;">
+              </div>
+              <button type="button" @click="saveDag">💾 儲存 DAG</button>
+              <button type="button" @click="loadDag">⟳ 載入 DAG</button>
+              <div style="font-size:13px; color:#445; min-width:180px;">最新：{{ latestDagName || (savedDagList && savedDagList[0]?.name) || "尚未儲存" }}</div>
+            </div>
           <div style="margin-top:8px;">
             <div class="badge">DAG 圖預覽</div>
             <div class="mermaid dag-mermaid" style="background:#0c1116; color:#e6edf3; padding:8px; border-radius:8px; overflow:auto;" v-html="dagMermaidSvg"></div>
+          </div>
+          <div style="margin-top:10px;">
+            <div class="badge">已儲存的 DAG</div>
+            <div v-if="(savedDagList && savedDagList.length > 0)" style="display:flex; flex-direction:column; gap:6px; margin-top:6px;">
+              <div v-for="(d,idx) in (savedDagList || [])" :key="d.name" style="border:1px solid #e3e7ef; border-radius:8px; padding:8px; background:#fff;">
+                <div style="display:flex; align-items:center; gap:8px; justify-content:space-between; flex-wrap:wrap;">
+                  <div style="font-weight:600;">{{ d.name }}</div>
+                  <button type="button" @click="toggleSavedDag(idx)">{{ d.expanded ? "收合" : "展開" }}</button>
+                </div>
+                <div v-if="d.expanded" style="margin-top:6px; color:#333; font-size:13px;">
+                  <div><strong>入口：</strong>{{ d.entry?.join(', ') || '（未設定）' }}</div>
+                  <div><strong>出口：</strong>{{ d.outputs?.join(', ') || '（未設定）' }}</div>
+                  <div style="margin-top:4px;">
+                    <strong>邊：</strong>
+                    <div v-if="d.edges?.length" style="display:flex; flex-direction:column; gap:2px; margin-top:2px;">
+                      <span v-for="(e,i2) in d.edges" :key="i2">{{ i2+1 }}. {{ e[0] }} ➜ {{ e[1] }}</span>
+                    </div>
+                    <div v-else>尚未新增邊</div>
+                  </div>
+                  <div v-if="d.mermaid" class="mermaid dag-mermaid" style="background:#0c1116; color:#e6edf3; padding:6px; border-radius:6px; margin-top:6px; overflow:auto;" v-html="d.mermaid"></div>
+                </div>
+              </div>
+            </div>
+            <div v-else style="margin-top:6px; color:#666; font-size:13px;">尚未儲存任何 DAG，按「儲存 DAG」後會顯示在此處。</div>
           </div>
         </div>
       </div>

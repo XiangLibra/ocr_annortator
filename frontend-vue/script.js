@@ -792,6 +792,34 @@ createApp({
     const dagEdgeDst = ref("");
     const dagMermaidText = ref("");
     const dagMermaidSvg = ref("");
+    const dagSaveName = ref("");
+    const savedDags = ref([]);
+    const latestDagName = ref("");
+    const savedDagList = computed(() => Array.isArray(savedDags.value) ? savedDags.value : []);
+    const localDagKey = "dag_saved_list";
+
+    function persistSavedDags() {
+      try {
+        localStorage.setItem(localDagKey, JSON.stringify(savedDags.value || []));
+      } catch (e) {
+        console.error("persist saved dags failed", e);
+      }
+    }
+
+    function loadLocalSavedDags() {
+      try {
+        const raw = localStorage.getItem(localDagKey);
+        if (raw) {
+          const arr = JSON.parse(raw);
+          if (Array.isArray(arr)) {
+            savedDags.value = arr;
+            latestDagName.value = arr[0]?.name || "";
+          }
+        }
+      } catch (e) {
+        console.error("load local dags failed", e);
+      }
+    }
     let mermaidDagInited = false;
     const mermaidPreview = computed(() => {
       const steps = resolveOrder();
@@ -1131,6 +1159,7 @@ createApp({
         dagEdges.value = (res.data?.edges || []).map(e => ({ src: e[0], dst: e[1] }));
         dagEntry.value = res.data?.entry || [];
         dagOutputs.value = res.data?.outputs || [];
+        if (res.data?.name) dagSaveName.value = res.data.name;
         await renderDagMermaid(res.data?.mermaid);
       } catch (e) {
         console.error(e);
@@ -1138,16 +1167,53 @@ createApp({
     }
 
     async function saveDag() {
+      const name = (dagSaveName.value || "").trim() || `DAG-${new Date().toLocaleString()}`;
       const payload = {
+        name,
         edges: dagEdges.value.map(e => [e.src, e.dst]),
         entry: dagEntry.value,
         outputs: dagOutputs.value
       };
+      // 先用本地狀態建立清單，避免 API 延遲時清單為空
+      const localEntry = {
+        name,
+        edges: payload.edges,
+        entry: payload.entry,
+        outputs: payload.outputs,
+        mermaid: dagMermaidSvg.value || dagMermaidText.value,
+        expanded: false
+      };
+      advancedOpen.value = true;
+      latestDagName.value = name;
+      const existingIdx = savedDags.value.findIndex(d => d.name === name);
+      if (existingIdx >= 0) {
+        savedDags.value.splice(existingIdx, 1, localEntry);
+        savedDags.value = JSON.parse(JSON.stringify(savedDags.value));
+      } else {
+        savedDags.value = [localEntry, ...savedDags.value];
+      }
+      persistSavedDags();
       try {
         const res = await axios.put(apiBase.value + "/api/dag", payload);
         await renderDagMermaid(res.data?.mermaid);
-        alert("DAG 已儲存");
+        dagSaveName.value = name;
+
+        // 以伺服器回傳覆蓋本地資料（若有）
+        if (res.data) {
+          const entry = {
+            ...localEntry,
+            mermaid: res.data?.mermaid || localEntry.mermaid
+          };
+          const idx = savedDags.value.findIndex(d => d.name === name);
+          if (idx >= 0) {
+            savedDags.value.splice(idx, 1, entry);
+            savedDags.value = JSON.parse(JSON.stringify(savedDags.value));
+          }
+          persistSavedDags();
+        }
+        alert(`DAG 「${name}」已儲存`);
       } catch (e) {
+        advancedOpen.value = true;
         alert("儲存 DAG 失敗");
       }
     }
@@ -1166,6 +1232,13 @@ createApp({
       dagEdges.value.splice(idx, 1);
       dagEdges.value = [...dagEdges.value];
       renderDagMermaid();
+    }
+
+    function toggleSavedDag(idx) {
+      const d = savedDags.value[idx];
+      if (!d) return;
+      d.expanded = !d.expanded;
+      savedDags.value = [...savedDags.value];
     }
 
     function getCompareText() {
@@ -1264,7 +1337,11 @@ createApp({
     watch([dagEdges, dagEntry, dagOutputs], () => renderDagMermaid(), { deep: true });
     watch(mermaidPreview, () => renderMermaid(), { flush: "post", immediate: true });
     watch(advancedOpen, (v) => { if (v) { renderMermaid(); renderDagMermaid(); } }, { flush: "post" });
-    onMounted(() => { renderMermaid(); loadDag(); });
+    onMounted(() => {
+      loadLocalSavedDags();
+      renderMermaid();
+      loadDag();
+    });
     fetchAgents();
 
     return {
@@ -1304,6 +1381,9 @@ createApp({
       advancedTemp,
       advancedPrompt,
       advancedOrder,
+      dagSaveName,
+      savedDags,
+      savedDagList,
       mermaidPreview,
       handleUpload,
       handleDrop,
@@ -1326,10 +1406,12 @@ createApp({
       dagEntry,
       dagOutputs,
       removeDagEdge,
+      toggleSavedDag,
       saveDag,
       loadDag,
       dagMermaidText,
-      dagMermaidSvg
+      dagMermaidSvg,
+      latestDagName
     };
   }
 }).mount("#app");
