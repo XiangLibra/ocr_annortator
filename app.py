@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import base64
 import json
 import os
 import sys
 import uuid
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 import ollama
@@ -12,6 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
+from pymongo import MongoClient
 
 import llm_processor
 sys.path.append(os.path.join(os.path.dirname(__file__), "backend"))
@@ -21,9 +24,16 @@ APP_DIR = os.path.dirname(os.path.abspath(__file__))
 FRONT_AGENTS_DIR = os.path.join(APP_DIR, "frontend-agents")
 FRONT_OCR_DIR = os.path.join(APP_DIR, "frontend-vue")
 OUTPUT_DIR = os.path.join(APP_DIR, "output")
+OCR_IMAGE_DIR = os.path.join(OUTPUT_DIR, "ocr_images")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
+os.makedirs(OCR_IMAGE_DIR, exist_ok=True)
 LANG_MAP = {"繁體中文": "chi_tra", "English": "eng"}
 STORE: Dict[str, Any] = {}
+MONGO_URL = os.getenv("MONGO_URL", "mongodb://localhost:27017")
+MONGO_DB = os.getenv("MONGO_DB", "ocr_insight")
+MONGO_COL = os.getenv("MONGO_COL", "ocr_records")
+mongo_client = MongoClient(MONGO_URL)
+ocr_collection = mongo_client[MONGO_DB][MONGO_COL]
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -329,12 +339,15 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
 if os.path.isdir(FRONT_OCR_DIR):
     app.mount("/static", StaticFiles(directory=FRONT_OCR_DIR), name="static")
+    app.mount("/ocr-files", StaticFiles(directory=OCR_IMAGE_DIR), name="ocr-files")
 
     @app.get("/", include_in_schema=False)
     def index():
         return FileResponse(os.path.join(FRONT_OCR_DIR, "index.html"))
+
 
 if os.path.isdir(FRONT_AGENTS_DIR):
     # 簡單提供 /agents 下的前端檔案（Vue CDN，無額外靜態需求）
@@ -360,6 +373,48 @@ for agent in default_agents:
     chain.add_agent(agent)
 
 CURRENT_DAG = DAGConfig()
+
+
+def save_image_from_data_url(file_id: str, page_index: int, data_url: str) -> Dict[str, str]:
+    if not data_url:
+        return {"imageFile": "", "imagePath": ""}
+    try:
+        header, encoded = data_url.split(",", 1)
+    except ValueError:
+        encoded = data_url
+    image_bytes = base64.b64decode(encoded)
+    image_file = f"{file_id}_p{page_index}.png"
+    image_path = os.path.join(OCR_IMAGE_DIR, image_file)
+    with open(image_path, "wb") as f:
+        f.write(image_bytes)
+    return {"imageFile": image_file, "imagePath": image_path}
+
+
+def doc_to_item(doc: Dict[str, Any]) -> Dict[str, Any]:
+    item = {k: v for k, v in doc.items() if k != "_id"}
+    item["fileId"] = doc.get("fileId") or str(doc.get("_id"))
+    pages = []
+    for p in doc.get("pages", []):
+        page = dict(p)
+        image_file = page.get("imageFile")
+        if image_file:
+            page["imageUrl"] = f"/ocr-files/{image_file}"
+        pages.append(page)
+    item["pages"] = pages
+    created_at = item.get("createdAt")
+    if isinstance(created_at, datetime):
+        item["createdAt"] = created_at.isoformat()
+    return item
+
+
+def get_record_by_id(file_id: str) -> Optional[Dict[str, Any]]:
+    record = STORE.get(file_id)
+    if record:
+        return record
+    doc = ocr_collection.find_one({"_id": file_id})
+    if doc:
+        return doc_to_item(doc)
+    return None
 
 # ═══════════════════════════════════════════════════════════════
 #                       API Endpoints
@@ -434,6 +489,51 @@ def get_dag():
     }
 
 
+@app.get("/api/ocr/history")
+def list_ocr_history():
+    items = []
+    cursor = ocr_collection.find(
+        {},
+        {"_id": 1, "fileId": 1, "filename": 1, "createdAt": 1, "pageCount": 1},
+    ).sort("createdAt", -1)
+    for doc in cursor:
+        created_at = doc.get("createdAt")
+        items.append(
+            {
+                "fileId": doc.get("fileId") or str(doc.get("_id")),
+                "filename": doc.get("filename"),
+                "pageCount": doc.get("pageCount"),
+                "createdAt": created_at.isoformat() if isinstance(created_at, datetime) else created_at,
+            }
+        )
+    return {"items": items}
+
+
+@app.get("/api/ocr/history/{file_id}")
+def get_ocr_history(file_id: str):
+    doc = ocr_collection.find_one({"_id": file_id})
+    if not doc:
+        raise HTTPException(status_code=404, detail="record not found")
+    return {"item": doc_to_item(doc)}
+
+
+@app.delete("/api/ocr/history/{file_id}")
+def delete_ocr_history(file_id: str):
+    doc = ocr_collection.find_one({"_id": file_id})
+    if not doc:
+        raise HTTPException(status_code=404, detail="record not found")
+    for p in doc.get("pages", []):
+        image_path = p.get("imagePath")
+        if image_path and os.path.isfile(image_path):
+            try:
+                os.remove(image_path)
+            except OSError:
+                pass
+    ocr_collection.delete_one({"_id": file_id})
+    STORE.pop(file_id, None)
+    return {"ok": True}
+
+
 @app.put("/api/dag")
 def set_dag(cfg: DAGConfig):
     """設定 DAG。前端可存取/載入並預覽 mermaid。"""
@@ -494,6 +594,9 @@ def compare_ocr(req: CompareOCRRequest):
             continue
         record = STORE.get(fid)
         if not record:
+            doc = ocr_collection.find_one({"_id": fid})
+            record = doc_to_item(doc) if doc else None
+        if not record:
             raise HTTPException(status_code=404, detail=f"fileId {fid} not found")
         txt = record.get("correctedFullText") or record.get("fullText") or ""
         texts.append((record.get("filename", fid), txt))
@@ -547,24 +650,68 @@ async def ocr(files: List[UploadFile] = File(...), language: str = Form("繁體�
         file_id = str(uuid.uuid4())
         content = await f.read()
         ocr_result = run_ocr_on_file(content, f.filename, lang_code)
+        db_pages = []
+        for page in ocr_result.get("pages", []):
+            saved = save_image_from_data_url(file_id, page.get("pageIndex", 0), page.get("imageDataUrl", ""))
+            page["imageUrl"] = f"/ocr-files/{saved['imageFile']}" if saved.get("imageFile") else ""
+            db_pages.append(
+                {
+                    "pageIndex": page.get("pageIndex"),
+                    "width": page.get("width"),
+                    "height": page.get("height"),
+                    "imageFile": saved.get("imageFile"),
+                    "imagePath": saved.get("imagePath"),
+                    "words": page.get("words", []),
+                }
+            )
         payload = {"fileId": file_id, "filename": f.filename, **ocr_result}
         STORE[file_id] = payload
+        record = {
+            "_id": file_id,
+            "fileId": file_id,
+            "filename": f.filename,
+            "pages": db_pages,
+            "fullText": ocr_result.get("fullText", ""),
+            "correctedFullText": None,
+            "pageCount": len(db_pages),
+            "createdAt": datetime.utcnow(),
+        }
+        ocr_collection.replace_one({"_id": file_id}, record, upsert=True)
         results.append(payload)
     return {"items": results}
 
 
 @app.post("/api/save")
-async def save(fileId: str = Form(...), correctedFullText: str = Form(None), wordEdits: str = Form(None)):
+async def save(
+    fileId: str = Form(...),
+    correctedFullText: str = Form(None),
+    wordEdits: str = Form(None),
+    pageWords: str = Form(None),
+):
     """
     儲存前端標註後的內容；wordEdits 為 JSON 字串:
       [{"wordId":"w12","newText":"臺灣"}]
     """
     record = STORE.get(fileId)
-    if not record:
+    db_doc = ocr_collection.find_one({"_id": fileId})
+    if not record and not db_doc:
         return {"ok": False, "msg": "fileId not found"}
+    if not record and db_doc:
+        record = doc_to_item(db_doc)
 
     if correctedFullText is not None:
         record["correctedFullText"] = correctedFullText
+
+    if pageWords:
+        try:
+            pages_payload = json.loads(pageWords)
+        except json.JSONDecodeError:
+            pages_payload = []
+        page_map = {p.get("pageIndex"): p for p in record.get("pages", [])}
+        for p in pages_payload:
+            idx = p.get("pageIndex")
+            if idx in page_map:
+                page_map[idx]["words"] = p.get("words", [])
 
     if wordEdits:
         edits = json.loads(wordEdits)
@@ -578,5 +725,23 @@ async def save(fileId: str = Form(...), correctedFullText: str = Form(None), wor
     out_path = os.path.join(OUTPUT_DIR, f"{fileId}.json")
     with open(out_path, "w", encoding="utf-8") as f:
         json.dump(record, f, ensure_ascii=False, indent=2)
+
+    if db_doc:
+        db_doc["correctedFullText"] = record.get("correctedFullText")
+        db_doc["fullText"] = record.get("fullText")
+        existing_pages = {p.get("pageIndex"): p for p in db_doc.get("pages", [])}
+        db_doc["pages"] = [
+            {
+                "pageIndex": p.get("pageIndex"),
+                "width": p.get("width"),
+                "height": p.get("height"),
+                "imageFile": p.get("imageFile") or existing_pages.get(p.get("pageIndex"), {}).get("imageFile"),
+                "imagePath": p.get("imagePath") or existing_pages.get(p.get("pageIndex"), {}).get("imagePath"),
+                "words": p.get("words", []),
+            }
+            for p in record.get("pages", [])
+        ]
+        ocr_collection.replace_one({"_id": fileId}, db_doc, upsert=True)
+    STORE[fileId] = record
 
     return {"ok": True, "path": out_path}

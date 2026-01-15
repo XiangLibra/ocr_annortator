@@ -16,141 +16,154 @@
       </div>
     </header>
 
-    <div class="card">
-      <form class="upload" @submit.prevent="handleUpload">
-        <div
-          @dragover.prevent
-          @drop="handleDrop"
-          style="flex:1; border:2px dashed #9fb4dc; border-radius:12px; padding:16px; text-align:center; background:#f8fbff;"
-        >
-          <div>{{ dropHint }}</div>
-          <div style="color:#3b4148; font-size:13px; margin-top:6px;" v-if="uploadedNames.length">
-            已選擇：{{ uploadedNames.join(', ') }}
-          </div>
-        </div>
-        <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
-          <input ref="fileInput" type="file" multiple accept=".pdf,.png,.jpg,.jpeg" />
-          <select v-model="language">
-            <option>繁體中文</option>
-            <option>English</option>
-          </select>
-          <button type="submit" :disabled="loading">上傳辨識</button>
-          <span v-if="loading">上傳 / OCR 中…</span>
-        </div>
-      </form>
-    </div>
-
-    <div v-for="fr in items" :key="fr.fileId" class="file-block">
-      <h2 style="margin: 6px 0 8px;">{{ fr.filename }}</h2>
-      <div class="file-body">
-        <div v-for="page in fr.pages" :key="page.pageIndex" class="page-card">
-          <page-canvas :page="page" @edited="updateDiff(fr)" />
-        </div>
-
-        <div style="margin-top: 10px;">
-          <label>整體文字（可選，直接手動修正）</label>
-          <textarea
-            :value="fr.correctedFullText ?? fr.fullText"
-            :placeholder="fr.fullText"
-            @input="(fr.correctedFullText = $event.target.value, updateDiff(fr))"
-          ></textarea>
-        </div>
-
-        <div class="actions">
-          <button @click="handleSave(fr)">💾 儲存修正</button>
-          <button v-if="exportReady[fr.fileId]" @click="handleDownload(fr)">⬇️ 下載匯出 (ZIP)</button>
-        </div>
-
-        <div v-if="diffs[fr.fileId]" class="diff-box">
-          <h3 style="margin: 0 0 6px;">差異比較</h3>
-          <text-diff :before="diffs[fr.fileId].before" :after="diffs[fr.fileId].after"></text-diff>
-        </div>
+    <div class="tab-nav card">
+      <div style="display:flex; gap:8px; flex-wrap:wrap;">
+        <button :class="['tab-btn', { active: activeTab === 'ocr' }]" @click="activeTab = 'ocr'">OCR 標註</button>
+        <button :class="['tab-btn', { active: activeTab === 'history' }]" @click="activeTab = 'history'">歷史紀錄</button>
       </div>
     </div>
-    <div class="card" style="margin-top:16px;">
-      <h3 style="margin:0 0 8px;">🔀 多代理比對 & 對話（同頁）</h3>
-      <div style="display:flex; flex-direction:column; gap:12px;">
-        <div class="list" style="border:1px solid #e3e7ef; border-radius:10px; padding:10px; background:#fff;">
-          <h4 style="margin:0 0 6px;">選擇要比對的 OCR 檔（至少兩個）</h4>
-          <div style="display:flex; flex-direction:column; gap:6px; max-height:220px; overflow:auto;">
-            <label v-for="fr in items" :key="fr.fileId" style="display:flex; align-items:center; gap:6px;">
-              <input type="checkbox" :value="fr.fileId" v-model="compareSelected">
-              <span>{{ fr.filename }}</span>
-            </label>
-          </div>
-          <button :disabled="compareLoading" style="margin-top:8px;" @click="compareFiles">🚀 比對文件</button>
-          <div v-if="compareResult" style="margin-top:8px; padding:8px; border-radius:10px; border:1px solid #e3e7ef; background:#fafafa;">
-            <div><strong>策略：</strong>{{ compareResult.strategy_used }}</div>
-            <div v-if="comparePairs.length === 2" style="margin-top:8px;">
-              <div class="badge">A / B 文件內容（目前選擇的前兩個）</div>
-              <div style="display:grid; grid-template-columns: repeat(auto-fit,minmax(240px,1fr)); gap:10px; margin-top:6px;">
-                <div v-for="(p,idx) in comparePairs" :key="idx" style="border:1px solid #e3e7ef; border-radius:10px; padding:8px; background:#fff;">
-                  <div style="font-weight:600; margin-bottom:4px;">{{ idx === 0 ? 'A' : 'B' }}：{{ p.name }}</div>
-                  <pre class="wrap" style="max-height:240px; overflow:auto;">{{ p.text }}</pre>
-                </div>
-              </div>
-            </div>
-            <div style="margin-top:6px;" v-if="compareResult.payload?.final_result !== undefined || compareResult.payload?.result !== undefined">
-              <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:8px;">
-                <div class="badge">AI 輸出</div>
-                <button type="button" @click="downloadCompare('docx')">⬇️ 下載 Word</button>
-                <button type="button" @click="downloadCompare('pdf')">⬇️ 下載 PDF</button>
-                <button type="button" @click="compareEditing = !compareEditing">{{ compareEditing ? "關閉編輯" : "📝 編輯" }}</button>
-              </div>
-              <div v-if="!compareEditing" class="markdown" v-html="compareRendered"></div>
-              <div v-else class="edit-grid" style="margin-top:12px;">
-                <div class="edit-cell">
-                  <label>左側：編輯區</label>
-                  <textarea v-model="compareEditedFinal" class="edit-textarea"></textarea>
-                </div>
-                <div class="edit-cell">
-                  <label>右側：Markdown 預覽</label>
-                  <div class="markdown edit-preview" v-html="compareRendered"></div>
-                </div>
-                <div class="edit-diff">
-                  <div class="badge" style="margin-top:6px;">差異 Diff</div>
-                  <pre class="diff full-diff">
-<template v-for="(p,idx) in compareDiffParts" :key="idx">
-  <span v-if="p.added" class="gh-inline-add">{{ p.value }}</span>
-  <span v-else-if="p.removed" class="gh-inline-del">{{ p.value }}</span>
-  <span v-else class="gh-inline-ctx">{{ p.value }}</span>
-</template>
-                  </pre>
-                </div>
-              </div>
+
+    <!-- OCR 標註頁 -->
+
+    <div v-show="activeTab === 'ocr'">
+       <div style="padding:8px; background:#fffbcc; border:1px solid #f0d000;">
+    我在 OCR 區塊裡（debug）
+      <div class="card">
+        <form class="upload" @submit.prevent="handleUpload">
+          <div
+            @dragover.prevent
+            @drop="handleDrop"
+            style="flex:1; border:2px dashed #9fb4dc; border-radius:12px; padding:16px; text-align:center; background:#f8fbff;"
+          >
+            <div>{{ dropHint }}</div>
+            <div style="color:#3b4148; font-size:13px; margin-top:6px;" v-if="uploadedNames?.length">
+              已選擇：{{ uploadedNames.join(', ') }}
             </div>
           </div>
-        </div>
-        <div class="list" v-if="compareResult" style="border:1px solid #e3e7ef; border-radius:10px; padding:10px; background:#fff;">
-          <h4 style="margin:0 0 6px;">💬 聊天</h4>
-          <div class="chat-shell">
-            <div class="chat-history" v-if="chatHistory && chatHistory.length">
-              <div v-for="(m,idx) in chatHistory" :key="idx" class="chat-msg" :class="m.role === 'user' ? 'me' : 'ai'">
-                <div class="chat-meta">
-                  <span class="chat-role">{{ m.role === 'user' ? '你' : '助理' }}</span>
-                </div>
-                <div class="chat-bubble" v-if="m.html" v-html="m.html"></div>
-                <div class="chat-bubble" v-else>{{ m.text }}</div>
-                <div class="chat-actions">
-                  <span>👍</span><span>👎</span><span>↻</span><span>…</span>
-                </div>
-              </div>
-            </div>
-            <div class="chat-input-row">
-              <textarea v-model="chatInput" placeholder="提出任何問題" rows="2"></textarea>
-              <button @click="runChat" :disabled="chatSending">💬 送出</button>
-            </div>
+          <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+            <input ref="fileInput" type="file" multiple accept=".pdf,.png,.jpg,.jpeg" />
+            <select v-model="language">
+              <option>繁體中文</option>
+              <option>English</option>
+            </select>
+            <button type="submit" :disabled="loading">上傳辨識</button>
+            <span v-if="loading">上傳 / OCR 中…</span>
           </div>
-        </div>
-        <div class="list" v-else style="border:1px dashed #e3e7ef; border-radius:10px; padding:10px; background:#fbfdff; color:#4a4f58;">
-          <h4 style="margin:0 0 6px;">🗨️ 多代理聊天 / 指令</h4>
-          <p style="margin:0;">請先完成「比對文件」，完成後會顯示聊天介面。</p>
+        </form>
+      </div>
+
+      <div v-for="fr in items" :key="fr.fileId" class="file-block">
+        <h2 style="margin: 6px 0 8px;">{{ fr.filename }}</h2>
+        <div class="file-body">
+          <div v-for="page in fr.pages" :key="page.pageIndex" class="page-card">
+            <page-canvas :page="page" @edited="updateDiff(fr)" />
+          </div>
+
+          <div style="margin-top: 10px;">
+            <label>整體文字（可選，直接手動修正）</label>
+            <textarea
+              :value="fr.correctedFullText ?? fr.fullText"
+              :placeholder="fr.fullText"
+              @input="(fr.correctedFullText = $event.target.value, updateDiff(fr))"
+            ></textarea>
+          </div>
+
+          <div class="actions">
+            <button @click="handleSave(fr)">💾 儲存修正</button>
+            <button v-if="exportReady[fr.fileId]" @click="handleDownload(fr)">⬇️ 下載匯出 (ZIP)</button>
+          </div>
+
+          <div v-if="diffs[fr.fileId]" class="diff-box">
+            <h3 style="margin: 0 0 6px;">差異比較</h3>
+            <text-diff :before="diffs[fr.fileId].before" :after="diffs[fr.fileId].after"></text-diff>
+          </div>
         </div>
       </div>
-    </div>
-    <div class="list" style="border:1px solid #e3e7ef; border-radius:10px; padding:10px; background:#fff; margin-top:12px;">
-      <button @click="advancedOpen = !advancedOpen" style="margin-bottom:8px;">⚙️ 進階</button>
-      <div v-if="advancedOpen" style="display:grid; grid-template-columns: repeat(auto-fit, minmax(240px,1fr)); gap:10px;">
+
+      <div class="card" style="margin-top:16px;">
+        <h3 style="margin:0 0 8px;">🔀 多代理比對 & 對話（同頁）</h3>
+        <div style="display:flex; flex-direction:column; gap:12px;">
+          <div class="list" style="border:1px solid #e3e7ef; border-radius:10px; padding:10px; background:#fff;">
+            <h4 style="margin:0 0 6px;">選擇要比對的 OCR 檔（至少兩個）</h4>
+            <div style="display:flex; flex-direction:column; gap:6px; max-height:220px; overflow:auto;">
+              <label v-for="fr in items" :key="fr.fileId" style="display:flex; align-items:center; gap:6px;">
+                <input type="checkbox" :value="fr.fileId" v-model="compareSelected">
+                <span>{{ fr.filename }}</span>
+              </label>
+            </div>
+            <button :disabled="compareLoading" style="margin-top:8px;" @click="compareFiles">🚀 比對文件</button>
+            <div v-if="compareResult" style="margin-top:8px; padding:8px; border-radius:10px; border:1px solid #e3e7ef; background:#fafafa;">
+              <div><strong>策略：</strong>{{ compareResult.strategy_used }}</div>
+              <div v-if="comparePairs.length === 2" style="margin-top:8px;">
+                <div class="badge">A / B 文件內容（目前選擇的前兩個）</div>
+                <div style="display:grid; grid-template-columns: repeat(auto-fit,minmax(240px,1fr)); gap:10px; margin-top:6px;">
+                  <div v-for="(p,idx) in comparePairs" :key="idx" style="border:1px solid #e3e7ef; border-radius:10px; padding:8px; background:#fff;">
+                    <div style="font-weight:600; margin-bottom:4px;">{{ idx === 0 ? 'A' : 'B' }}：{{ p.name }}</div>
+                    <pre class="wrap" style="max-height:240px; overflow:auto;">{{ p.text }}</pre>
+                  </div>
+                </div>
+              </div>
+              <div style="margin-top:6px;" v-if="compareResult.payload?.final_result !== undefined || compareResult.payload?.result !== undefined">
+                <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:8px;">
+                  <div class="badge">AI 輸出</div>
+                  <button type="button" @click="downloadCompare('docx')">⬇️ 下載 Word</button>
+                  <button type="button" @click="downloadCompare('pdf')">⬇️ 下載 PDF</button>
+                  <button type="button" @click="compareEditing = !compareEditing">{{ compareEditing ? "關閉編輯" : "📝 編輯" }}</button>
+                </div>
+                <div v-if="!compareEditing" class="markdown" v-html="compareRendered"></div>
+                <div v-else class="edit-grid" style="margin-top:12px;">
+                  <div class="edit-cell">
+                    <label>左側：編輯區</label>
+                    <textarea v-model="compareEditedFinal" class="edit-textarea"></textarea>
+                  </div>
+                  <div class="edit-cell">
+                    <label>右側：Markdown 預覽</label>
+                    <div class="markdown edit-preview" v-html="compareRendered"></div>
+                  </div>
+                  <div class="edit-diff">
+                    <div class="badge" style="margin-top:6px;">差異 Diff</div>
+                    <pre class="diff full-diff">
+                      <span v-for="(p,idx) in compareDiffParts" :key="idx"
+                        :class="p.added ? 'gh-inline-add' : (p.removed ? 'gh-inline-del' : 'gh-inline-ctx')">
+                        {{ p.value }}
+                      </span>
+                    </pre>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="list" v-if="compareResult" style="border:1px solid #e3e7ef; border-radius:10px; padding:10px; background:#fff;">
+            <h4 style="margin:0 0 6px;">💬 聊天</h4>
+            <div class="chat-shell">
+              <div class="chat-history" v-if="chatHistory && chatHistory?.length">
+                <div v-for="(m,idx) in chatHistory" :key="idx" class="chat-msg" :class="m.role === 'user' ? 'me' : 'ai'">
+                  <div class="chat-meta">
+                    <span class="chat-role">{{ m.role === 'user' ? '你' : '助理' }}</span>
+                  </div>
+                  <div class="chat-bubble" v-if="m.html" v-html="m.html"></div>
+                  <div class="chat-bubble" v-else>{{ m.text }}</div>
+                  <div class="chat-actions">
+                    <span>👍</span><span>👎</span><span>↻</span><span>…</span>
+                  </div>
+                </div>
+              </div>
+              <div class="chat-input-row">
+                <textarea v-model="chatInput" placeholder="提出任何問題" rows="2"></textarea>
+                <button @click="runChat" :disabled="chatSending">💬 送出</button>
+              </div>
+            </div>
+          </div>
+          <div class="list" v-else style="border:1px dashed #e3e7ef; border-radius:10px; padding:10px; background:#fbfdff; color:#4a4f58;">
+            <h4 style="margin:0 0 6px;">🗨️ 多代理聊天 / 指令</h4>
+            <p style="margin:0;">請先完成「比對文件」，完成後會顯示聊天介面。</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="list" style="border:1px solid #e3e7ef; border-radius:10px; padding:10px; background:#fff; margin-top:12px;">
+        <button @click="advancedOpen = !advancedOpen" style="margin-bottom:8px;">⚙️ 進階</button>
+        <div v-if="advancedOpen" style="display:grid; grid-template-columns: repeat(auto-fit, minmax(240px,1fr)); gap:10px;">
         <div style="grid-column: 1 / -1; border:1px dashed #e3e7ef; padding:10px; border-radius:10px; background:#fbfdff;">
           <h4 style="margin:0 0 6px;">🗨️ 多代理上下文設定</h4>
           <label style="display:flex; align-items:center; gap:6px; margin-bottom:6px;">
@@ -326,8 +339,69 @@
         </div>
       </div>
     </div>
+  
+   
+      <div v-show="activeTab === 'history'">
+ 
+    <div class="card">
+      <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap;">
+        <h3 style="margin:0;">📚 歷史紀錄</h3>
+        <button type="button" @click="fetchHistory">重新整理</button>
+      </div>
+      <div v-if="historyLoading" style="margin-top:8px;">載入中…</div>
+      <div v-else>
+        <div v-if="historyError" style="margin-top:8px; color:#b42318;">{{ historyError }}</div>
+        <div v-else-if="!historyItems?.length" style="margin-top:8px; color:#666;">尚無歷史紀錄</div>
+        <div v-else style="display:flex; flex-direction:column; gap:8px; margin-top:10px;">
+          <div v-for="item in historyItems" :key="item.fileId" class="list" style="border:1px solid #e3e7ef; border-radius:10px; padding:10px; background:#fff;">
+            <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap;">
+              <div>
+                <div style="font-weight:600;">{{ item.filename || item.fileId }}</div>
+                <div style="font-size:13px; color:#667085;">{{ item.createdAt || "時間未知" }} · {{ item.pageCount || 0 }} 頁</div>
+              </div>
+              <div style="display:flex; gap:8px; flex-wrap:wrap;">
+                <button type="button" @click="viewHistory(item)">查看</button>
+                <button type="button" @click="deleteHistory(item)">刪除</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div v-if="historySelected" class="file-block">
+      <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap;">
+        <h2 style="margin: 6px 0 8px;">{{ historySelected.filename }}</h2>
+        <button type="button" @click="historySelected = null">返回列表</button>
+      </div>
+      <div class="file-body">
+        <div v-for="page in historySelected.pages" :key="page.pageIndex" class="page-card">
+          <page-canvas :page="page" @edited="updateDiff(historySelected)" />
+        </div>
+
+        <div style="margin-top: 10px;">
+          <label>整體文字（可選，直接手動修正）</label>
+          <textarea
+            :value="historySelected.correctedFullText ?? historySelected.fullText"
+            :placeholder="historySelected.fullText"
+            @input="(historySelected.correctedFullText = $event.target.value, updateDiff(historySelected))"
+          ></textarea>
+        </div>
+
+        <div class="actions">
+          <button @click="handleSave(historySelected)">💾 儲存修正</button>
+          <button v-if="exportReady[historySelected.fileId]" @click="handleDownload(historySelected)">⬇️ 下載匯出 (ZIP)</button>
+        </div>
+
+        <div v-if="diffs[historySelected.fileId]" class="diff-box">
+          <h3 style="margin: 0 0 6px;">差異比較</h3>
+          <text-diff :before="diffs[historySelected.fileId].before" :after="diffs[historySelected.fileId].after"></text-diff>
+        </div>
+      </div>
+    </div>
   </div>
 </div>
+
   <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/konva@9/konva.min.js"></script>
@@ -339,5 +413,8 @@
   <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
   <script src="/static/script.js"></script>
+
+
+
 </body>
 </html>

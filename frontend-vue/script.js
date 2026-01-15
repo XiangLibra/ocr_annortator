@@ -319,6 +319,10 @@ async function dataUrlToBlob(dataUrl) {
   return await res.blob();
 }
 
+function getPageImageSrc(page) {
+  return page?.imageDataUrl || page?.imageUrl || "";
+}
+
 async function downloadZip(fr) {
   const zip = new JSZip();
   const base = fr.filename.replace(/\.[^.]+$/, "");
@@ -327,7 +331,9 @@ async function downloadZip(fr) {
   const imgFolder = zip.folder("images");
   if (imgFolder) {
     for (const p of fr.pages) {
-      const blob = await dataUrlToBlob(p.imageDataUrl);
+      const src = getPageImageSrc(p);
+      if (!src) continue;
+      const blob = await dataUrlToBlob(src);
       imgFolder.file(`${base}_p${p.pageIndex}.png`, blob);
     }
   }
@@ -404,7 +410,7 @@ const PageCanvas = {
 
     function loadImage() {
       const img = new Image();
-      img.src = props.page.imageDataUrl;
+      img.src = getPageImageSrc(props.page);
       img.onload = () => {
         imageNode = new Konva.Image({
           image: img,
@@ -733,6 +739,8 @@ const PageCanvas = {
   `
 };
 
+
+
 // ---- root app ----
 createApp({
   components: { PageCanvas, TextDiff },
@@ -775,6 +783,11 @@ createApp({
     const chatContextNote = ref("");
     const chatHistory = ref([]);
     const chatSending = ref(false);
+    const activeTab = ref("ocr");
+    const historyItems = ref([]);
+    const historyLoading = ref(false);
+    const historyError = ref("");
+    const historySelected = ref(null);
     const advancedOpen = ref(false);
     const advancedUseCustom = ref(true);
     const advancedCustomName = ref("__custom_adv_agent");
@@ -950,6 +963,51 @@ createApp({
       }
     }
 
+    async function fetchHistory() {
+      historyLoading.value = true;
+      historyError.value = "";
+      try {
+        const res = await axios.get(apiBase.value + "/api/ocr/history");
+        historyItems.value = res.data?.items || [];
+      } catch (e) {
+        historyError.value = "載入歷史紀錄失敗";
+      } finally {
+        historyLoading.value = false;
+      }
+    }
+
+    async function viewHistory(item) {
+      if (!item?.fileId) return;
+      try {
+        const res = await axios.get(apiBase.value + `/api/ocr/history/${item.fileId}`);
+        const record = JSON.parse(JSON.stringify(res.data?.item || null));
+        if (!record) return;
+        record.correctedFullText = record.correctedFullText ?? null;
+        historySelected.value = record;
+        stampOriginalOrder([record]);
+        const base = buildBeforeForDiff(record);
+        baselines.value[record.fileId] = base;
+        diffs.value = { ...diffs.value, [record.fileId]: { before: base, after: base } };
+        exportReady.value = { ...exportReady.value, [record.fileId]: true };
+      } catch (e) {
+        alert("讀取歷史內容失敗");
+      }
+    }
+
+    async function deleteHistory(item) {
+      if (!item?.fileId) return;
+      if (!confirm(`確定刪除「${item.filename || item.fileId}」嗎？`)) return;
+      try {
+        await axios.delete(apiBase.value + `/api/ocr/history/${item.fileId}`);
+        historyItems.value = historyItems.value.filter(h => h.fileId !== item.fileId);
+        if (historySelected.value?.fileId === item.fileId) {
+          historySelected.value = null;
+        }
+      } catch (e) {
+        alert("刪除失敗，請稍後再試");
+      }
+    }
+
     function updateDiff(fr) {
       const before = baselines.value[fr.fileId] ?? buildBeforeForDiff(fr);
       const after = buildAfterForDiff(fr);
@@ -966,10 +1024,20 @@ createApp({
           edits.push({ wordId: w.id, newText: w._newText });
         }
       }));
+      const pageWords = fr.pages.map(p => ({
+        pageIndex: p.pageIndex,
+        words: p.words.map(w => ({
+          id: w.id,
+          text: w._edited ? w._newText : w.text,
+          conf: w.conf,
+          bbox: w.bbox
+        }))
+      }));
       const form = new FormData();
       form.append("fileId", fr.fileId);
       if (fr.correctedFullText) form.append("correctedFullText", fr.correctedFullText);
       if (edits.length) form.append("wordEdits", JSON.stringify(edits));
+      form.append("pageWords", JSON.stringify(pageWords));
       const res = await axios.post(apiBase.value + "/api/save", form);
       const ok = res.data?.ok;
       alert(ok ? "已儲存成功" : "儲存失敗");
@@ -1147,6 +1215,9 @@ createApp({
 
     watch(apiBase, () => {
       fetchAgents();
+      if (activeTab.value === "history") {
+        fetchHistory();
+      }
     });
     function autoSelectFirstTwo(list) {
       const arr = list || [];
@@ -1335,9 +1406,11 @@ createApp({
     }
 
     watch([dagEdges, dagEntry, dagOutputs], () => renderDagMermaid(), { deep: true });
+    watch(activeTab, (v) => { if (v === "history") fetchHistory(); });
     watch(mermaidPreview, () => renderMermaid(), { flush: "post", immediate: true });
     watch(advancedOpen, (v) => { if (v) { renderMermaid(); renderDagMermaid(); } }, { flush: "post" });
     onMounted(() => {
+      activeTab.value = "ocr";
       loadLocalSavedDags();
       renderMermaid();
       loadDag();
@@ -1373,6 +1446,11 @@ createApp({
       chatUseCompare,
       chatContextNote,
       chatHistory,
+      activeTab,
+      historyItems,
+      historyLoading,
+      historyError,
+      historySelected,
       agentMeta,
       advancedOpen,
       advancedModel,
@@ -1391,6 +1469,9 @@ createApp({
       handleDownload,
       updateDiff,
       compareFiles,
+      fetchHistory,
+      viewHistory,
+      deleteHistory,
       runChat,
       ensureCustomAgent,
       resolveOrder,
@@ -1415,3 +1496,5 @@ createApp({
     };
   }
 }).mount("#app");
+
+

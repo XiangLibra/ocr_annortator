@@ -318,6 +318,15 @@ wheels = [
 ]
 
 [[package]]
+name = "dnspython"
+version = "2.8.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/8c/8b/57666417c0f90f08bcafa776861060426765fdb422eb10212086fb811d26/dnspython-2.8.0.tar.gz", hash = "sha256:181d3c6996452cb1189c4046c61599b84a5a86e099562ffde77d26984ff26d0f", size = 368251, upload-time = "2025-09-07T18:58:00.022Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/ba/5a/18ad964b0086c6e62e2e7500f7edc89e3faa45033c71c1893d34eed2b2de/dnspython-2.8.0-py3-none-any.whl", hash = "sha256:01d9bbc4a2d76bf0db7c1f729812ded6d912bd318d3b1cf81d30c0f845dbf3af", size = 331094, upload-time = "2025-09-07T18:57:58.071Z" },
+]
+
+[[package]]
 name = "easyocr"
 version = "1.7.2"
 source = { registry = "https://pypi.org/simple" }
@@ -1134,7 +1143,7 @@ name = "nvidia-cudnn-cu12"
 version = "9.10.2.21"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "nvidia-cublas-cu12", marker = "sys_platform != 'win32'" },
+    { name = "nvidia-cublas-cu12", marker = "(platform_machine != 'aarch64' and sys_platform == 'linux') or (sys_platform != 'darwin' and sys_platform != 'linux' and sys_platform != 'win32')" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/ba/51/e123d997aa098c61d029f76663dedbfb9bc8dcf8c60cbd6adbe42f76d049/nvidia_cudnn_cu12-9.10.2.21-py3-none-manylinux_2_27_x86_64.whl", hash = "sha256:949452be657fa16687d0930933f032835951ef0892b37d2d53824d1a84dc97a8", size = 706758467, upload-time = "2025-06-06T21:54:08.597Z" },
@@ -1145,7 +1154,7 @@ name = "nvidia-cufft-cu12"
 version = "11.3.3.83"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "nvidia-nvjitlink-cu12", marker = "sys_platform != 'win32'" },
+    { name = "nvidia-nvjitlink-cu12", marker = "(platform_machine != 'aarch64' and sys_platform == 'linux') or (sys_platform != 'darwin' and sys_platform != 'linux' and sys_platform != 'win32')" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/1f/13/ee4e00f30e676b66ae65b4f08cb5bcbb8392c03f54f2d5413ea99a5d1c80/nvidia_cufft_cu12-11.3.3.83-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:4d2dd21ec0b88cf61b62e6b43564355e5222e4a3fb394cac0db101f2dd0d4f74", size = 193118695, upload-time = "2025-03-07T01:45:27.821Z" },
@@ -1172,9 +1181,9 @@ name = "nvidia-cusolver-cu12"
 version = "11.7.3.90"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "nvidia-cublas-cu12", marker = "sys_platform != 'win32'" },
-    { name = "nvidia-cusparse-cu12", marker = "sys_platform != 'win32'" },
-    { name = "nvidia-nvjitlink-cu12", marker = "sys_platform != 'win32'" },
+    { name = "nvidia-cublas-cu12", marker = "(platform_machine != 'aarch64' and sys_platform == 'linux') or (sys_platform != 'darwin' and sys_platform != 'linux' and sys_platform != 'win32')" },
+    { name = "nvidia-cusparse-cu12", marker = "(platform_machine != 'aarch64' and sys_platform == 'linux') or (sys_platform != 'darwin' and sys_platform != 'linux' and sys_platform != 'win32')" },
+    { name = "nvidia-nvjitlink-cu12", marker = "(platform_machine != 'aarch64' and sys_platform == 'linux') or (sys_platform != 'darwin' and sys_platform != 'linux' and sys_platform != 'win32')" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/85/48/9a13d2975803e8cf2777d5ed57b87a0b6ca2cc795f9a4f59796a910bfb80/nvidia_cusolver_cu12-11.7.3.90-py3-none-manylinux_2_27_x86_64.whl", hash = "sha256:4376c11ad263152bd50ea295c05370360776f8c3427b30991df774f9fb26c450", size = 267506905, upload-time = "2025-03-07T01:47:16.273Z" },
@@ -1185,7 +1194,7 @@ name = "nvidia-cusparse-cu12"
 version = "12.5.8.93"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "nvidia-nvjitlink-cu12", marker = "sys_platform != 'win32'" },
+    { name = "nvidia-nvjitlink-cu12", marker = "(platform_machine != 'aarch64' and sys_platform == 'linux') or (sys_platform != 'darwin' and sys_platform != 'linux' and sys_platform != 'win32')" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/c2/f5/e1854cb2f2bcd4280c44736c93550cc300ff4b8c95ebe370d0aa7d2b473d/nvidia_cusparse_cu12-12.5.8.93-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:1ec05d76bbbd8b61b06a80e1eaf8cf4959c3d4ce8e711b65ebd0443bb0ebb13b", size = 288216466, upload-time = "2025-03-07T01:48:13.779Z" },
@@ -1252,6 +1261,7 @@ dependencies = [
     { name = "paddlepaddle-gpu" },
     { name = "pillow" },
     { name = "plotly" },
+    { name = "pymongo" },
     { name = "pymupdf" },
     { name = "pytesseract" },
     { name = "python-doctr" },
@@ -1281,6 +1291,7 @@ requires-dist = [
     { name = "paddlepaddle-gpu", specifier = ">=2.6.2" },
     { name = "pillow", specifier = ">=11.2.1" },
     { name = "plotly", specifier = ">=6.1.2" },
+    { name = "pymongo", specifier = ">=4.8.0" },
     { name = "pymupdf", specifier = ">=1.25.5" },
     { name = "pytesseract", specifier = ">=0.3.13" },
     { name = "python-doctr", extras = ["torch"], specifier = ">=0.11.0" },
@@ -1756,6 +1767,27 @@ wheels = [
 ]
 
 [[package]]
+name = "pymongo"
+version = "4.16.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "dnspython" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/65/9c/a4895c4b785fc9865a84a56e14b5bd21ca75aadc3dab79c14187cdca189b/pymongo-4.16.0.tar.gz", hash = "sha256:8ba8405065f6e258a6f872fe62d797a28f383a12178c7153c01ed04e845c600c", size = 2495323, upload-time = "2026-01-07T18:05:48.107Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/4d/93/c36c0998dd91ad8b5031d2e77a903d5cd705b5ba05ca92bcc8731a2c3a8d/pymongo-4.16.0-cp310-cp310-macosx_10_9_x86_64.whl", hash = "sha256:ed162b2227f98d5b270ecbe1d53be56c8c81db08a1a8f5f02d89c7bb4d19591d", size = 807993, upload-time = "2026-01-07T18:03:40.302Z" },
+    { url = "https://files.pythonhosted.org/packages/f3/96/d2117d792fa9fedb2f6ccf0608db31f851e8382706d7c3c88c6ac92cc958/pymongo-4.16.0-cp310-cp310-macosx_11_0_arm64.whl", hash = "sha256:4a9390dce61d705a88218f0d7b54d7e1fa1b421da8129fc7c009e029a9a6b81e", size = 808355, upload-time = "2026-01-07T18:03:42.13Z" },
+    { url = "https://files.pythonhosted.org/packages/ae/2e/e79b7b86c0dd6323d0985c201583c7921d67b842b502aae3f3327cbe3935/pymongo-4.16.0-cp310-cp310-manylinux1_i686.manylinux_2_28_i686.manylinux_2_5_i686.whl", hash = "sha256:92a232af9927710de08a6c16a9710cc1b175fb9179c0d946cd4e213b92b2a69a", size = 1182337, upload-time = "2026-01-07T18:03:44.126Z" },
+    { url = "https://files.pythonhosted.org/packages/7b/82/07ec9966381c57d941fddc52637e9c9653e63773be410bd8605f74683084/pymongo-4.16.0-cp310-cp310-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:4d79aa147ce86aef03079096d83239580006ffb684eead593917186aee407767", size = 1200928, upload-time = "2026-01-07T18:03:45.52Z" },
+    { url = "https://files.pythonhosted.org/packages/44/15/9d45e3cc6fa428b0a3600b0c1c86b310f28c91251c41493460695ab40b6b/pymongo-4.16.0-cp310-cp310-manylinux2014_ppc64le.manylinux_2_17_ppc64le.manylinux_2_28_ppc64le.whl", hash = "sha256:19a1c96e7f39c7a59a9cfd4d17920cf9382f6f684faeff4649bf587dc59f8edc", size = 1239418, upload-time = "2026-01-07T18:03:47.03Z" },
+    { url = "https://files.pythonhosted.org/packages/c8/b3/f35ee51e2a3f05f673ad4f5e803ae1284c42f4413e8d121c4958f1af4eb9/pymongo-4.16.0-cp310-cp310-manylinux2014_s390x.manylinux_2_17_s390x.manylinux_2_28_s390x.whl", hash = "sha256:efe020c46ce3c3a89af6baec6569635812129df6fb6cf76d4943af3ba6ee2069", size = 1229045, upload-time = "2026-01-07T18:03:48.377Z" },
+    { url = "https://files.pythonhosted.org/packages/18/2d/1688b88d7c0a5c01da8c703dea831419435d9ce67c6ddbb0ac629c9c72d2/pymongo-4.16.0-cp310-cp310-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:9dc2c00bed568732b89e211b6adca389053d5e6d2d5a8979e80b813c3ec4d1f9", size = 1196517, upload-time = "2026-01-07T18:03:50.205Z" },
+    { url = "https://files.pythonhosted.org/packages/e6/c6/e89db0f23bd20757b627a5d8c73a609ffd6741887b9004ab229208a79764/pymongo-4.16.0-cp310-cp310-win32.whl", hash = "sha256:5b9c6d689bbe5beb156374508133218610e14f8c81e35bc17d7a14e30ab593e6", size = 794911, upload-time = "2026-01-07T18:03:52.701Z" },
+    { url = "https://files.pythonhosted.org/packages/37/54/e00a5e517153f310a33132375159e42dceb12bee45b51b35aa0df14f1866/pymongo-4.16.0-cp310-cp310-win_amd64.whl", hash = "sha256:2290909275c9b8f637b0a92eb9b89281e18a72922749ebb903403ab6cc7da914", size = 804801, upload-time = "2026-01-07T18:03:57.671Z" },
+    { url = "https://files.pythonhosted.org/packages/e5/0a/2572faf89195a944c99c6d756227019c8c5f4b5658ecc261c303645dfe69/pymongo-4.16.0-cp310-cp310-win_arm64.whl", hash = "sha256:6af1aaa26f0835175d2200e62205b78e7ec3ffa430682e322cc91aaa1a0dbf28", size = 797579, upload-time = "2026-01-07T18:03:59.1Z" },
+]
+
+[[package]]
 name = "pymupdf"
 version = "1.26.6"
 source = { registry = "https://pypi.org/simple" }
@@ -2169,6 +2201,7 @@ dependencies = [
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/be/f9/5e4491e5ccf42f5d9cfc663741d261b3e6e1683ae7812114e7636409fcc6/sqlalchemy-2.0.45.tar.gz", hash = "sha256:1632a4bda8d2d25703fdad6363058d882541bdaaee0e5e3ddfa0cd3229efce88", size = 9869912, upload-time = "2025-12-09T21:05:16.737Z" }
 wheels = [
+    { url = "https://files.pythonhosted.org/packages/fe/70/75b1387d72e2847220441166c5eb4e9846dd753895208c13e6d66523b2d9/sqlalchemy-2.0.45-cp310-cp310-macosx_11_0_arm64.whl", hash = "sha256:c64772786d9eee72d4d3784c28f0a636af5b0a29f3fe26ff11f55efe90c0bd85", size = 2154148, upload-time = "2025-12-10T20:03:21.023Z" },
     { url = "https://files.pythonhosted.org/packages/d8/a4/7805e02323c49cb9d1ae5cd4913b28c97103079765f520043f914fca4cb3/sqlalchemy-2.0.45-cp310-cp310-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:7ae64ebf7657395824a19bca98ab10eb9a3ecb026bf09524014f1bb81cb598d4", size = 3233051, upload-time = "2025-12-09T22:06:04.768Z" },
     { url = "https://files.pythonhosted.org/packages/d7/ec/32ae09139f61bef3de3142e85c47abdee8db9a55af2bb438da54a4549263/sqlalchemy-2.0.45-cp310-cp310-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:0f02325709d1b1a1489f23a39b318e175a171497374149eae74d612634b234c0", size = 3232781, upload-time = "2025-12-09T22:09:54.435Z" },
     { url = "https://files.pythonhosted.org/packages/ad/bd/bf7b869b6f5585eac34222e1cf4405f4ba8c3b85dd6b1af5d4ce8bca695f/sqlalchemy-2.0.45-cp310-cp310-musllinux_1_2_aarch64.whl", hash = "sha256:d2c3684fca8a05f0ac1d9a21c1f4a266983a7ea9180efb80ffeb03861ecd01a0", size = 3182096, upload-time = "2025-12-09T22:06:06.169Z" },
