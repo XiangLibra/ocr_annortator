@@ -280,6 +280,7 @@ class RunRequest(BaseModel):
     strategy: Optional[str] = Field(default="auto", description="auto|single|parallel|sequential|branched")
     agents: Optional[List[str]] = None
     context: Optional[Dict[str, Any]] = None
+    batchId: Optional[str] = None
 
 
 class RunResponse(BaseModel):
@@ -298,6 +299,7 @@ class CompareOCRRequest(BaseModel):
     overrides: Optional[List[CompareOverride]] = None
     strategy: Optional[str] = Field(default="auto", description="auto|single|parallel|sequential")
     agents: Optional[List[str]] = None
+    batchId: Optional[str] = None
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -420,6 +422,21 @@ def batch_doc_to_item(doc: Dict[str, Any]) -> Dict[str, Any]:
         "filenames": [f.get("filename") for f in files],
         "kind": "batch",
     }
+
+
+def iso_dt(value: Any) -> Any:
+    return value.isoformat() if isinstance(value, datetime) else value
+
+
+def batch_doc_to_detail(doc: Dict[str, Any]) -> Dict[str, Any]:
+    item = batch_doc_to_item(doc)
+    item["compareResults"] = [
+        {**c, "createdAt": iso_dt(c.get("createdAt"))} for c in (doc.get("compareResults") or [])
+    ]
+    item["chatLogs"] = [
+        {**c, "createdAt": iso_dt(c.get("createdAt"))} for c in (doc.get("chatLogs") or [])
+    ]
+    return item
 
 
 def delete_record(file_id: str) -> None:
@@ -584,7 +601,7 @@ def get_ocr_history_batch(batch_id: str):
     doc = ocr_batch_collection.find_one({"_id": batch_id})
     if not doc:
         raise HTTPException(status_code=404, detail="batch not found")
-    return {"batch": batch_doc_to_item(doc)}
+    return {"batch": batch_doc_to_detail(doc)}
 
 
 @app.delete("/api/ocr/history/file/{file_id}")
@@ -649,6 +666,17 @@ def run_chain(req: RunRequest):
     else:
         raise HTTPException(status_code=400, detail="策略必須為 single/parallel/sequential/branched/auto")
 
+    if req.batchId:
+        final_text = payload.get("final_result") or payload.get("result") or ""
+        chat_entries = [
+            {"role": "user", "text": req.input_text, "createdAt": datetime.utcnow()},
+            {"role": "ai", "text": final_text, "createdAt": datetime.utcnow()},
+        ]
+        ocr_batch_collection.update_one(
+            {"_id": req.batchId},
+            {"$push": {"chatLogs": {"$each": chat_entries}}},
+        )
+
     return RunResponse(strategy_used=strategy, decision=decision, payload=payload)
 
 
@@ -661,11 +689,11 @@ def history():
 def compare_ocr(req: CompareOCRRequest):
     # 收集 OCR 文字
     override_map = {o.fileId: o for o in (req.overrides or [])}
-    texts = []
+    compare_files: List[Dict[str, Any]] = []
     for fid in req.fileIds:
         if fid in override_map:
             o = override_map[fid]
-            texts.append((o.filename or fid, o.text))
+            compare_files.append({"fileId": fid, "filename": o.filename or fid, "text": o.text})
             continue
         record = STORE.get(fid)
         if not record:
@@ -674,15 +702,15 @@ def compare_ocr(req: CompareOCRRequest):
         if not record:
             raise HTTPException(status_code=404, detail=f"fileId {fid} not found")
         txt = record.get("correctedFullText") or record.get("fullText") or ""
-        texts.append((record.get("filename", fid), txt))
+        compare_files.append({"fileId": fid, "filename": record.get("filename", fid), "text": txt})
 
     # 組合 prompt：要求同時提供 Markdown 表格摘要差異/相似
     input_text = (
         "請比較以下文件的差異與相似之處，並列出主要差異點。\n"
         "請用 Markdown 表格摘要：欄位包含「項目」「文件1」「文件2」「差異/說明」。\n\n"
     )
-    for idx, (name, txt) in enumerate(texts, 1):
-        input_text += f"--- 文件{idx}: {name} ---\n{txt}\n\n"
+    for idx, item in enumerate(compare_files, 1):
+        input_text += f"--- 文件{idx}: {item['filename']} ---\n{item['text']}\n\n"
 
     # 呼叫 multi-agent 決策
     available_agents = list(chain.agents.keys())
@@ -705,6 +733,21 @@ def compare_ocr(req: CompareOCRRequest):
         payload = chain.execute_branched(CURRENT_DAG, input_text, None)
     else:
         raise HTTPException(status_code=400, detail="策略必須為 single/parallel/sequential/branched/auto")
+
+    if req.batchId:
+        compare_entry = {
+            "compareId": str(uuid.uuid4()),
+            "createdAt": datetime.utcnow(),
+            "fileIds": [c.get("fileId") for c in compare_files],
+            "files": compare_files,
+            "strategy_used": strategy,
+            "decision": decision,
+            "payload": payload,
+        }
+        ocr_batch_collection.update_one(
+            {"_id": req.batchId},
+            {"$push": {"compareResults": compare_entry}},
+        )
 
     return RunResponse(strategy_used=strategy, decision=decision, payload=payload)
 

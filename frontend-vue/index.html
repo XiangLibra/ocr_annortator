@@ -368,6 +368,67 @@
             </div>
           </div>
         </div>
+
+        <div v-if="historyCompare" style="margin-top:12px; padding:10px; border-radius:10px; border:1px solid #e3e7ef; background:#fafafa;">
+          <div class="badge">歷史比對結果（最新）</div>
+          <div v-if="historyComparePairs.length === 2" style="margin-top:8px;">
+            <div class="badge">A / B 文件內容</div>
+            <div style="display:grid; grid-template-columns: repeat(auto-fit,minmax(240px,1fr)); gap:10px; margin-top:6px;">
+              <div v-for="(p,idx) in historyComparePairs" :key="idx" style="border:1px solid #e3e7ef; border-radius:10px; padding:8px; background:#fff;">
+                <div style="font-weight:600; margin-bottom:4px;">{{ idx === 0 ? 'A' : 'B' }}：{{ p.name }}</div>
+                <pre class="wrap" style="max-height:240px; overflow:auto;">{{ p.text }}</pre>
+              </div>
+            </div>
+          </div>
+          <div style="margin-top:6px;">
+            <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:8px;">
+              <div class="badge">AI 輸出</div>
+              <button type="button" @click="historyCompareEditing = !historyCompareEditing">{{ historyCompareEditing ? "關閉編輯" : "📝 編輯" }}</button>
+            </div>
+            <div v-if="!historyCompareEditing" class="markdown" v-html="historyCompareRendered"></div>
+            <div v-else class="edit-grid" style="margin-top:12px;">
+              <div class="edit-cell">
+                <label>左側：編輯區</label>
+                <textarea v-model="historyCompareEditedFinal" class="edit-textarea"></textarea>
+              </div>
+              <div class="edit-cell">
+                <label>右側：Markdown 預覽</label>
+                <div class="markdown edit-preview" v-html="historyCompareRendered"></div>
+              </div>
+              <div class="edit-diff">
+                <div class="badge" style="margin-top:6px;">差異 Diff</div>
+                <pre class="diff full-diff">
+                  <span v-for="(p,idx) in historyCompareDiffParts" :key="idx"
+                    :class="p.added ? 'gh-inline-add' : (p.removed ? 'gh-inline-del' : 'gh-inline-ctx')">
+                    {{ p.value }}
+                  </span>
+                </pre>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="list" style="margin-top:12px; border:1px solid #e3e7ef; border-radius:10px; padding:10px; background:#fff;">
+          <h4 style="margin:0 0 6px;">💬 聊天</h4>
+          <div class="chat-shell">
+            <div class="chat-history" v-if="historyChatHistory && historyChatHistory?.length">
+              <div v-for="(m,idx) in historyChatHistory" :key="idx" class="chat-msg" :class="m.role === 'user' ? 'me' : 'ai'">
+                <div class="chat-meta">
+                  <span class="chat-role">{{ m.role === 'user' ? '你' : '助理' }}</span>
+                </div>
+                <div class="chat-bubble" v-if="m.html" v-html="m.html"></div>
+                <div class="chat-bubble" v-else>{{ m.text }}</div>
+                <div class="chat-actions">
+                  <span>👍</span><span>👎</span><span>↻</span><span>…</span>
+                </div>
+              </div>
+            </div>
+            <div class="chat-input-row">
+              <textarea v-model="historyChatInput" placeholder="提出任何問題" rows="2"></textarea>
+              <button @click="runHistoryChat" :disabled="historyChatSending">💬 送出</button>
+            </div>
+          </div>
+        </div>
       </div>
 
         <div v-if="historySelected" class="file-block">

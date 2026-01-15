@@ -753,6 +753,7 @@ createApp({
     const diffs = ref({});
     const exportReady = ref({});
     const fileInput = ref(null);
+    const currentBatchId = ref("");
     const agents = ref([]);
     const agentMeta = reactive({});
     const compareSelected = ref([]);
@@ -789,6 +790,26 @@ createApp({
     const historyError = ref("");
     const historySelected = ref(null);
     const historyBatch = ref(null);
+    const historyCompare = ref(null);
+    const historyCompareOriginalFinal = ref("");
+    const historyCompareEditedFinal = ref("");
+    const historyCompareEditing = ref(false);
+    const historyCompareFinalText = computed(
+      () => normalizeText(historyCompareEditedFinal.value || historyCompareOriginalFinal.value || "")
+    );
+    const historyCompareRendered = computed(() => safeMarkdown((historyCompareFinalText.value || "").trim()));
+    const historyCompareDiffParts = computed(() =>
+      Diff.diffWordsWithSpace(historyCompareOriginalFinal.value || "", historyCompareEditedFinal.value || "")
+    );
+    const historyComparePairs = computed(() => {
+      const files = historyCompare.value?.files || [];
+      return files
+        .slice(0, 2)
+        .map(f => ({ name: f.filename || f.fileId, text: f.text || "" }));
+    });
+    const historyChatInput = ref("");
+    const historyChatHistory = ref([]);
+    const historyChatSending = ref(false);
     const advancedOpen = ref(false);
     const advancedUseCustom = ref(true);
     const advancedCustomName = ref("__custom_adv_agent");
@@ -945,6 +966,12 @@ createApp({
         items.value = list;
         diffs.value = initialDiffs;
         exportReady.value = {};
+        currentBatchId.value = res.data?.batchId || "";
+        compareResult.value = null;
+        compareOriginalFinal.value = "";
+        compareEditedFinal.value = "";
+        compareEditing.value = false;
+        chatHistory.value = [];
         // 預設勾選前兩個檔案以便快速比對
         autoSelectFirstTwo(list);
       } finally {
@@ -962,6 +989,15 @@ createApp({
       if (e.dataTransfer?.files?.length) {
         await processFiles(e.dataTransfer.files);
       }
+    }
+
+    function normalizeChatLogs(logs) {
+      return (logs || []).map(m => ({
+        role: m.role,
+        text: m.text || "",
+        html: m.role === "ai" ? safeMarkdown(m.text || "") : "",
+        streaming: false
+      }));
     }
 
     async function fetchHistory() {
@@ -990,8 +1026,24 @@ createApp({
       if (!item?.batchId) return;
       try {
         const res = await axios.get(apiBase.value + `/api/ocr/history/batch/${item.batchId}`);
-        historyBatch.value = res.data?.batch || null;
+        const batch = res.data?.batch || null;
+        historyBatch.value = batch;
         historySelected.value = null;
+        historyCompare.value = null;
+        historyCompareOriginalFinal.value = "";
+        historyCompareEditedFinal.value = "";
+        historyCompareEditing.value = false;
+        historyChatHistory.value = [];
+        historyChatInput.value = "";
+        if (batch?.compareResults?.length) {
+          const last = batch.compareResults[batch.compareResults.length - 1];
+          historyCompare.value = last;
+          historyCompareOriginalFinal.value = getCompareFinalFromResult(last);
+          historyCompareEditedFinal.value = historyCompareOriginalFinal.value;
+        }
+        if (batch?.chatLogs?.length) {
+          historyChatHistory.value = normalizeChatLogs(batch.chatLogs);
+        }
       } catch (e) {
         alert("讀取批次內容失敗");
       }
@@ -1006,6 +1058,11 @@ createApp({
         record.correctedFullText = record.correctedFullText ?? null;
         historySelected.value = record;
         historyBatch.value = null;
+        historyCompare.value = null;
+        historyCompareOriginalFinal.value = "";
+        historyCompareEditedFinal.value = "";
+        historyCompareEditing.value = false;
+        historyChatHistory.value = [];
         stampOriginalOrder([record]);
         const base = buildBeforeForDiff(record);
         baselines.value[record.fileId] = base;
@@ -1184,7 +1241,8 @@ createApp({
           fileIds: compareSelected.value,
           overrides,
           agents: resolveOrder(),
-          strategy: chatStrategy.value
+          strategy: chatStrategy.value,
+          batchId: currentBatchId.value || undefined
         });
         compareResult.value = res.data;
         const finalTxt = res.data?.payload?.final_result ?? res.data?.payload?.result ?? "";
@@ -1198,19 +1256,24 @@ createApp({
       }
     }
 
+    function buildChatContext(compareSource, pairsSource) {
+      const ctx = {};
+      if (chatUseCompare.value && compareSource) {
+        ctx.compare_final = getCompareFinalFromResult(compareSource);
+        ctx.compare_files = (pairsSource || []).map(p => p.name);
+      }
+      if (chatContextNote.value?.trim()) {
+        ctx.note = chatContextNote.value;
+      }
+      return ctx;
+    }
+
     async function runChat() {
       if (!chatInput.value.trim()) return alert("請輸入內容");
       try {
         await ensureCustomAgent();
         const order = resolveOrder();
-        const ctx = {};
-        if (chatUseCompare.value && compareResult.value) {
-          ctx.compare_final = compareFinalText.value;
-          ctx.compare_files = comparePairs.value?.map(p => p.name) || [];
-        }
-        if (chatContextNote.value?.trim()) {
-          ctx.note = chatContextNote.value;
-        }
+        const ctx = buildChatContext(compareResult.value, comparePairs.value);
         chatSending.value = true;
 
         // 先把使用者訊息與待回覆的 AI 氣泡放上去，避免卡住看不到
@@ -1225,6 +1288,7 @@ createApp({
           strategy: chatStrategy.value,
           agents: order.length ? order : chatAgents.value,
           context: Object.keys(ctx).length ? ctx : undefined,
+          batchId: currentBatchId.value || undefined
         });
         chatResult.value = res.data;
         const aiText = res.data?.payload?.final_result || res.data?.payload?.result || "";
@@ -1240,6 +1304,43 @@ createApp({
         alert("執行失敗，請稍後再試");
       } finally {
         chatSending.value = false;
+      }
+    }
+
+    async function runHistoryChat() {
+      if (!historyBatch.value?.batchId) return alert("請先選擇批次");
+      if (!historyChatInput.value.trim()) return alert("請輸入內容");
+      try {
+        await ensureCustomAgent();
+        const order = resolveOrder();
+        const ctx = buildChatContext(historyCompare.value, historyComparePairs.value);
+        historyChatSending.value = true;
+
+        const userMsg = { role: "user", text: historyChatInput.value };
+        const aiMsg = { role: "ai", text: "...", html: "", streaming: true };
+        historyChatHistory.value = [...historyChatHistory.value, userMsg, aiMsg];
+        const userInputBackup = historyChatInput.value;
+        historyChatInput.value = "";
+
+        const res = await axios.post(apiBase.value + "/api/run", {
+          input_text: userInputBackup,
+          strategy: chatStrategy.value,
+          agents: order.length ? order : chatAgents.value,
+          context: Object.keys(ctx).length ? ctx : undefined,
+          batchId: historyBatch.value.batchId
+        });
+        const aiText = res.data?.payload?.final_result || res.data?.payload?.result || "";
+        typeOutMessage(aiMsg, aiText);
+      } catch (e) {
+        const last = historyChatHistory.value[historyChatHistory.value.length - 1];
+        if (last && last.role === "ai") {
+          last.text = "⚠️ 執行失敗，請稍後再試";
+          last.html = "";
+          last.streaming = false;
+        }
+        alert("執行失敗，請稍後再試");
+      } finally {
+        historyChatSending.value = false;
       }
     }
 
@@ -1342,9 +1443,13 @@ createApp({
       savedDags.value = [...savedDags.value];
     }
 
-    function getCompareText() {
-      const payload = compareResult.value?.payload || {};
+    function getCompareFinalFromResult(result) {
+      const payload = result?.payload || {};
       return normalizeText(payload.final_result || payload.result || "");
+    }
+
+    function getCompareText() {
+      return getCompareFinalFromResult(compareResult.value);
     }
 
     async function downloadCompare(type = "docx") {
@@ -1458,6 +1563,7 @@ createApp({
       uploadedNames,
       dropHint,
       agents,
+      currentBatchId,
       compareSelected,
       compareResult,
       compareLoading,
@@ -1482,6 +1588,17 @@ createApp({
       historyError,
       historySelected,
       historyBatch,
+      historyCompare,
+      historyCompareOriginalFinal,
+      historyCompareEditedFinal,
+      historyCompareEditing,
+      historyCompareFinalText,
+      historyCompareRendered,
+      historyCompareDiffParts,
+      historyComparePairs,
+      historyChatInput,
+      historyChatHistory,
+      historyChatSending,
       agentMeta,
       advancedOpen,
       advancedModel,
@@ -1504,6 +1621,7 @@ createApp({
       viewHistory,
       deleteHistory,
       runChat,
+      runHistoryChat,
       ensureCustomAgent,
       resolveOrder,
       renderMermaid,
