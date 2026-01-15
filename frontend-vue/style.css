@@ -40,6 +40,15 @@ header {
   border-color: #2f6fed;
   box-shadow: 0 8px 18px rgba(47, 111, 237, 0.18);
 }
+.fade-slide-enter-active,
+.fade-slide-leave-active {
+  transition: opacity 0.22s ease, transform 0.22s ease;
+}
+.fade-slide-enter-from,
+.fade-slide-leave-to {
+  opacity: 0;
+  transform: translateY(8px);
+}
 h1 {
   margin: 0;
   font-size: 24px;

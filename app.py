@@ -32,8 +32,10 @@ STORE: Dict[str, Any] = {}
 MONGO_URL = os.getenv("MONGO_URL", "mongodb://localhost:27017")
 MONGO_DB = os.getenv("MONGO_DB", "ocr_insight")
 MONGO_COL = os.getenv("MONGO_COL", "ocr_records")
+MONGO_BATCH_COL = os.getenv("MONGO_BATCH_COL", "ocr_batches")
 mongo_client = MongoClient(MONGO_URL)
 ocr_collection = mongo_client[MONGO_DB][MONGO_COL]
+ocr_batch_collection = mongo_client[MONGO_DB][MONGO_BATCH_COL]
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -407,6 +409,33 @@ def doc_to_item(doc: Dict[str, Any]) -> Dict[str, Any]:
     return item
 
 
+def batch_doc_to_item(doc: Dict[str, Any]) -> Dict[str, Any]:
+    created_at = doc.get("createdAt")
+    files = doc.get("files", []) or []
+    return {
+        "batchId": doc.get("batchId") or str(doc.get("_id")),
+        "createdAt": created_at.isoformat() if isinstance(created_at, datetime) else created_at,
+        "fileCount": len(files),
+        "files": files,
+        "filenames": [f.get("filename") for f in files],
+        "kind": "batch",
+    }
+
+
+def delete_record(file_id: str) -> None:
+    doc = ocr_collection.find_one({"_id": file_id})
+    if doc:
+        for p in doc.get("pages", []):
+            image_path = p.get("imagePath")
+            if image_path and os.path.isfile(image_path):
+                try:
+                    os.remove(image_path)
+                except OSError:
+                    pass
+        ocr_collection.delete_one({"_id": file_id})
+    STORE.pop(file_id, None)
+
+
 def get_record_by_id(file_id: str) -> Optional[Dict[str, Any]]:
     record = STORE.get(file_id)
     if record:
@@ -491,46 +520,92 @@ def get_dag():
 
 @app.get("/api/ocr/history")
 def list_ocr_history():
-    items = []
-    cursor = ocr_collection.find(
-        {},
-        {"_id": 1, "fileId": 1, "filename": 1, "createdAt": 1, "pageCount": 1},
-    ).sort("createdAt", -1)
-    for doc in cursor:
-        created_at = doc.get("createdAt")
-        items.append(
-            {
-                "fileId": doc.get("fileId") or str(doc.get("_id")),
+    batches: List[Dict[str, Any]] = []
+    try:
+        cursor = ocr_batch_collection.find({}, {"_id": 1, "batchId": 1, "createdAt": 1, "files": 1}).sort(
+            "createdAt", -1
+        )
+        batches = [batch_doc_to_item(doc) for doc in cursor]
+    except Exception:
+        batches = []
+
+    # 若沒有任何 batch，回退成以單檔案為主的列表
+    if batches:
+        return {"items": batches}
+
+    items_by_id: Dict[str, Dict[str, Any]] = {}
+    try:
+        cursor = ocr_collection.find(
+            {},
+            {"_id": 1, "fileId": 1, "filename": 1, "createdAt": 1, "pageCount": 1},
+        ).sort("createdAt", -1)
+        for doc in cursor:
+            created_at = doc.get("createdAt")
+            file_id = doc.get("fileId") or str(doc.get("_id"))
+            items_by_id[file_id] = {
+                "fileId": file_id,
                 "filename": doc.get("filename"),
                 "pageCount": doc.get("pageCount"),
                 "createdAt": created_at.isoformat() if isinstance(created_at, datetime) else created_at,
+                "kind": "file",
             }
-        )
+    except Exception:
+        items_by_id = {}
+
+    for fid, record in STORE.items():
+        if fid in items_by_id:
+            continue
+        items_by_id[fid] = {
+            "fileId": fid,
+            "filename": record.get("filename"),
+            "pageCount": len(record.get("pages", [])),
+            "createdAt": record.get("createdAt"),
+            "kind": "file",
+        }
+
+    def sort_key(item: Dict[str, Any]):
+        val = item.get("createdAt") or ""
+        return val
+
+    items = sorted(items_by_id.values(), key=sort_key, reverse=True)
     return {"items": items}
 
 
-@app.get("/api/ocr/history/{file_id}")
-def get_ocr_history(file_id: str):
+@app.get("/api/ocr/history/file/{file_id}")
+def get_ocr_history_file(file_id: str):
+    record = get_record_by_id(file_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="record not found")
+    return {"item": record}
+
+
+@app.get("/api/ocr/history/batch/{batch_id}")
+def get_ocr_history_batch(batch_id: str):
+    doc = ocr_batch_collection.find_one({"_id": batch_id})
+    if not doc:
+        raise HTTPException(status_code=404, detail="batch not found")
+    return {"batch": batch_doc_to_item(doc)}
+
+
+@app.delete("/api/ocr/history/file/{file_id}")
+def delete_ocr_history_file(file_id: str):
     doc = ocr_collection.find_one({"_id": file_id})
     if not doc:
         raise HTTPException(status_code=404, detail="record not found")
-    return {"item": doc_to_item(doc)}
+    delete_record(file_id)
+    return {"ok": True}
 
 
-@app.delete("/api/ocr/history/{file_id}")
-def delete_ocr_history(file_id: str):
-    doc = ocr_collection.find_one({"_id": file_id})
+@app.delete("/api/ocr/history/batch/{batch_id}")
+def delete_ocr_history_batch(batch_id: str):
+    doc = ocr_batch_collection.find_one({"_id": batch_id})
     if not doc:
-        raise HTTPException(status_code=404, detail="record not found")
-    for p in doc.get("pages", []):
-        image_path = p.get("imagePath")
-        if image_path and os.path.isfile(image_path):
-            try:
-                os.remove(image_path)
-            except OSError:
-                pass
-    ocr_collection.delete_one({"_id": file_id})
-    STORE.pop(file_id, None)
+        raise HTTPException(status_code=404, detail="batch not found")
+    for f in doc.get("files", []):
+        fid = f.get("fileId")
+        if fid:
+            delete_record(fid)
+    ocr_batch_collection.delete_one({"_id": batch_id})
     return {"ok": True}
 
 
@@ -646,6 +721,9 @@ async def ocr(files: List[UploadFile] = File(...), language: str = Form("繁體�
     """
     lang_code = LANG_MAP.get(language, "chi_tra")
     results = []
+    batch_id = str(uuid.uuid4())
+    created_at = datetime.utcnow()
+    batch_files = []
     for f in files:
         file_id = str(uuid.uuid4())
         content = await f.read()
@@ -664,21 +742,49 @@ async def ocr(files: List[UploadFile] = File(...), language: str = Form("繁體�
                     "words": page.get("words", []),
                 }
             )
-        payload = {"fileId": file_id, "filename": f.filename, **ocr_result}
+        payload = {
+            "fileId": file_id,
+            "filename": f.filename,
+            "createdAt": created_at.isoformat(),
+            "batchId": batch_id,
+            **ocr_result,
+        }
         STORE[file_id] = payload
         record = {
             "_id": file_id,
             "fileId": file_id,
             "filename": f.filename,
+            "batchId": batch_id,
             "pages": db_pages,
             "fullText": ocr_result.get("fullText", ""),
             "correctedFullText": None,
             "pageCount": len(db_pages),
-            "createdAt": datetime.utcnow(),
+            "createdAt": created_at,
         }
-        ocr_collection.replace_one({"_id": file_id}, record, upsert=True)
+        result = ocr_collection.replace_one({"_id": file_id}, record, upsert=True)
+        print(
+            "[OCR][DB] upserted file_id=%s filename=%s pages=%s acknowledged=%s upserted_id=%s matched=%s"
+            % (
+                file_id,
+                f.filename,
+                len(db_pages),
+                result.acknowledged,
+                result.upserted_id,
+                result.matched_count,
+            )
+        )
+        batch_files.append(
+            {"fileId": file_id, "filename": f.filename, "pageCount": len(db_pages)}
+        )
         results.append(payload)
-    return {"items": results}
+    batch_record = {
+        "_id": batch_id,
+        "batchId": batch_id,
+        "files": batch_files,
+        "createdAt": created_at,
+    }
+    ocr_batch_collection.replace_one({"_id": batch_id}, batch_record, upsert=True)
+    return {"items": results, "batchId": batch_id}
 
 
 @app.post("/api/save")

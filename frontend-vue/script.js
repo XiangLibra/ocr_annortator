@@ -788,6 +788,7 @@ createApp({
     const historyLoading = ref(false);
     const historyError = ref("");
     const historySelected = ref(null);
+    const historyBatch = ref(null);
     const advancedOpen = ref(false);
     const advancedUseCustom = ref(true);
     const advancedCustomName = ref("__custom_adv_agent");
@@ -977,13 +978,34 @@ createApp({
     }
 
     async function viewHistory(item) {
+      if (!item) return;
+      if (item.kind === "batch" || item.batchId) {
+        await viewHistoryBatch(item);
+      } else {
+        await viewHistoryFile(item);
+      }
+    }
+
+    async function viewHistoryBatch(item) {
+      if (!item?.batchId) return;
+      try {
+        const res = await axios.get(apiBase.value + `/api/ocr/history/batch/${item.batchId}`);
+        historyBatch.value = res.data?.batch || null;
+        historySelected.value = null;
+      } catch (e) {
+        alert("讀取批次內容失敗");
+      }
+    }
+
+    async function viewHistoryFile(item) {
       if (!item?.fileId) return;
       try {
-        const res = await axios.get(apiBase.value + `/api/ocr/history/${item.fileId}`);
+        const res = await axios.get(apiBase.value + `/api/ocr/history/file/${item.fileId}`);
         const record = JSON.parse(JSON.stringify(res.data?.item || null));
         if (!record) return;
         record.correctedFullText = record.correctedFullText ?? null;
         historySelected.value = record;
+        historyBatch.value = null;
         stampOriginalOrder([record]);
         const base = buildBeforeForDiff(record);
         baselines.value[record.fileId] = base;
@@ -995,13 +1017,21 @@ createApp({
     }
 
     async function deleteHistory(item) {
-      if (!item?.fileId) return;
-      if (!confirm(`確定刪除「${item.filename || item.fileId}」嗎？`)) return;
+      if (!item) return;
+      const name = item.filename || item.batchId || item.fileId;
+      if (!confirm(`確定刪除「${name}」嗎？`)) return;
       try {
-        await axios.delete(apiBase.value + `/api/ocr/history/${item.fileId}`);
-        historyItems.value = historyItems.value.filter(h => h.fileId !== item.fileId);
-        if (historySelected.value?.fileId === item.fileId) {
+        if (item.kind === "batch" || item.batchId) {
+          await axios.delete(apiBase.value + `/api/ocr/history/batch/${item.batchId}`);
+          historyItems.value = historyItems.value.filter(h => h.batchId !== item.batchId);
+          historyBatch.value = null;
           historySelected.value = null;
+        } else {
+          await axios.delete(apiBase.value + `/api/ocr/history/file/${item.fileId}`);
+          historyItems.value = historyItems.value.filter(h => h.fileId !== item.fileId);
+          if (historySelected.value?.fileId === item.fileId) {
+            historySelected.value = null;
+          }
         }
       } catch (e) {
         alert("刪除失敗，請稍後再試");
@@ -1451,6 +1481,7 @@ createApp({
       historyLoading,
       historyError,
       historySelected,
+      historyBatch,
       agentMeta,
       advancedOpen,
       advancedModel,
@@ -1496,5 +1527,3 @@ createApp({
     };
   }
 }).mount("#app");
-
-

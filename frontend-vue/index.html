@@ -24,10 +24,7 @@
     </div>
 
     <!-- OCR 標註頁 -->
-
     <div v-show="activeTab === 'ocr'">
-       <div style="padding:8px; background:#fffbcc; border:1px solid #f0d000;">
-    我在 OCR 區塊裡（debug）
       <div class="card">
         <form class="upload" @submit.prevent="handleUpload">
           <div
@@ -340,24 +337,85 @@
       </div>
     </div>
   
-   
-      <div v-show="activeTab === 'history'">
- 
+    </div>
+  <div v-show="activeTab === 'history'">
     <div class="card">
       <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap;">
         <h3 style="margin:0;">📚 歷史紀錄</h3>
         <button type="button" @click="fetchHistory">重新整理</button>
       </div>
+      <div style="margin-top:6px; color:#667085; font-size:13px;">點選下方列表的「查看」後，內容會顯示在中間區塊。</div>
+    </div>
+
+    <transition name="fade-slide">
+      <div v-if="historyBatch || historySelected" style="margin-top:12px;">
+        <div v-if="historyBatch" class="card">
+        <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap;">
+          <div>
+            <div style="font-weight:600;">批次：{{ historyBatch.batchId }}</div>
+            <div style="font-size:13px; color:#667085;">共 {{ historyBatch.fileCount }} 檔</div>
+          </div>
+          <button type="button" @click="historyBatch = null">返回清單</button>
+        </div>
+        <div style="display:flex; flex-direction:column; gap:8px; margin-top:10px;">
+          <div v-for="f in historyBatch.files" :key="f.fileId" class="list" style="border:1px solid #e3e7ef; border-radius:10px; padding:10px; background:#fff;">
+            <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap;">
+              <div>
+                <div style="font-weight:600;">{{ f.filename || f.fileId }}</div>
+                <div style="font-size:13px; color:#667085;">{{ f.pageCount || 0 }} 頁</div>
+              </div>
+              <button type="button" @click="viewHistory(f)">查看檔案</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+        <div v-if="historySelected" class="file-block">
+        <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap;">
+          <h2 style="margin: 6px 0 8px;">{{ historySelected.filename }}</h2>
+          <button type="button" @click="historySelected = null">返回列表</button>
+        </div>
+        <div class="file-body">
+          <div v-for="page in historySelected.pages" :key="page.pageIndex" class="page-card">
+            <page-canvas :page="page" @edited="updateDiff(historySelected)" />
+          </div>
+
+          <div style="margin-top: 10px;">
+            <label>整體文字（可選，直接手動修正）</label>
+            <textarea
+              :value="historySelected.correctedFullText ?? historySelected.fullText"
+              :placeholder="historySelected.fullText"
+              @input="(historySelected.correctedFullText = $event.target.value, updateDiff(historySelected))"
+            ></textarea>
+          </div>
+
+          <div class="actions">
+            <button @click="handleSave(historySelected)">💾 儲存修正</button>
+            <button v-if="exportReady[historySelected.fileId]" @click="handleDownload(historySelected)">⬇️ 下載匯出 (ZIP)</button>
+          </div>
+
+          <div v-if="diffs[historySelected.fileId]" class="diff-box">
+            <h3 style="margin: 0 0 6px;">差異比較</h3>
+            <text-diff :before="diffs[historySelected.fileId].before" :after="diffs[historySelected.fileId].after"></text-diff>
+          </div>
+        </div>
+        </div>
+      </div>
+    </transition>
+
+    <div class="card" style="margin-top:16px;">
       <div v-if="historyLoading" style="margin-top:8px;">載入中…</div>
       <div v-else>
         <div v-if="historyError" style="margin-top:8px; color:#b42318;">{{ historyError }}</div>
         <div v-else-if="!historyItems?.length" style="margin-top:8px; color:#666;">尚無歷史紀錄</div>
         <div v-else style="display:flex; flex-direction:column; gap:8px; margin-top:10px;">
-          <div v-for="item in historyItems" :key="item.fileId" class="list" style="border:1px solid #e3e7ef; border-radius:10px; padding:10px; background:#fff;">
+          <div v-for="item in historyItems" :key="item.fileId || item.batchId" class="list" style="border:1px solid #e3e7ef; border-radius:10px; padding:10px; background:#fff;">
             <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap;">
               <div>
-                <div style="font-weight:600;">{{ item.filename || item.fileId }}</div>
-                <div style="font-size:13px; color:#667085;">{{ item.createdAt || "時間未知" }} · {{ item.pageCount || 0 }} 頁</div>
+                <div style="font-weight:600;">{{ (item.files && item.files.length ? (item.files[0]?.filename || item.batchId) : (item.filename || item.fileId)) }}</div>
+                <div style="font-size:13px; color:#667085;">
+                  {{ item.createdAt || "時間未知" }} · {{ item.fileCount || item.pageCount || (item.files ? item.files.length : 0) }} 檔
+                </div>
               </div>
               <div style="display:flex; gap:8px; flex-wrap:wrap;">
                 <button type="button" @click="viewHistory(item)">查看</button>
@@ -365,37 +423,6 @@
               </div>
             </div>
           </div>
-        </div>
-      </div>
-    </div>
-
-    <div v-if="historySelected" class="file-block">
-      <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap;">
-        <h2 style="margin: 6px 0 8px;">{{ historySelected.filename }}</h2>
-        <button type="button" @click="historySelected = null">返回列表</button>
-      </div>
-      <div class="file-body">
-        <div v-for="page in historySelected.pages" :key="page.pageIndex" class="page-card">
-          <page-canvas :page="page" @edited="updateDiff(historySelected)" />
-        </div>
-
-        <div style="margin-top: 10px;">
-          <label>整體文字（可選，直接手動修正）</label>
-          <textarea
-            :value="historySelected.correctedFullText ?? historySelected.fullText"
-            :placeholder="historySelected.fullText"
-            @input="(historySelected.correctedFullText = $event.target.value, updateDiff(historySelected))"
-          ></textarea>
-        </div>
-
-        <div class="actions">
-          <button @click="handleSave(historySelected)">💾 儲存修正</button>
-          <button v-if="exportReady[historySelected.fileId]" @click="handleDownload(historySelected)">⬇️ 下載匯出 (ZIP)</button>
-        </div>
-
-        <div v-if="diffs[historySelected.fileId]" class="diff-box">
-          <h3 style="margin: 0 0 6px;">差異比較</h3>
-          <text-diff :before="diffs[historySelected.fileId].before" :after="diffs[historySelected.fileId].after"></text-diff>
         </div>
       </div>
     </div>
