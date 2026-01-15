@@ -1541,11 +1541,12 @@ createApp({
       return getCompareFinalFromResult(compareResult.value);
     }
 
-    async function downloadCompare(type = "docx") {
-      const text = getCompareText();
+    async function downloadMarkdownAs(type, markdownText, filenameBase) {
+      const text = (markdownText || "").toString();
       if (!text.trim()) return alert("沒有可下載的內容");
       const htmlBody = safeMarkdown(text);
       const plain = toPlainTextFromMarkdown(text);
+      const base = sanitizeFileBase(filenameBase || "compare_output");
 
       if (type === "pdf" && window.jspdf?.jsPDF) {
         try {
@@ -1564,12 +1565,10 @@ createApp({
             const imgData = canvas.toDataURL("image/png");
             const pdf = new jsPDF("p", "pt", "a4");
             const pageWidth = pdf.internal.pageSize.getWidth();
-            const pageHeight = pdf.internal.pageSize.getHeight();
             const imgWidth = pageWidth - 60;
             const imgHeight = (canvas.height * imgWidth) / canvas.width;
-            let y = 30;
-            pdf.addImage(imgData, "PNG", 30, y, imgWidth, imgHeight);
-            pdf.save("compare_output.pdf");
+            pdf.addImage(imgData, "PNG", 30, 30, imgWidth, imgHeight);
+            pdf.save(`${base}.pdf`);
           } else {
             // fallback 純文字
             const doc = new jsPDF({ unit: "pt", format: "a4" });
@@ -1584,7 +1583,7 @@ createApp({
                 y += 18;
               });
             });
-            doc.save("compare_output.pdf");
+            doc.save(`${base}.pdf`);
           }
           return;
         } catch (err) {
@@ -1604,7 +1603,7 @@ createApp({
                 y += 18;
               });
             });
-            doc.save("compare_output.pdf");
+            doc.save(`${base}.pdf`);
             return;
           } catch (fallbackErr) {
             console.error("pdf fallback failed", fallbackErr);
@@ -1617,12 +1616,22 @@ createApp({
         const url = URL.createObjectURL(blob);
         const a = document.createElement("a");
         a.href = url;
-        a.download = "compare_output.docx";
+        a.download = `${base}.docx`;
         document.body.appendChild(a);
         a.click();
         a.remove();
         URL.revokeObjectURL(url);
       });
+    }
+
+    function downloadCompare(type = "docx") {
+      downloadMarkdownAs(type, getCompareText(), "compare_output");
+    }
+
+    function downloadHistoryCompare(type = "docx") {
+      if (!historyCompare.value) return alert("沒有可下載的內容");
+      const batchCode = historyBatch.value?.batchId || "batch";
+      downloadMarkdownAs(type, historyCompareFinalText.value, `compare_${batchCode}`);
     }
 
     function downloadComparePdf() {
@@ -1720,6 +1729,7 @@ createApp({
       saveAgentConfig,
       downloadCompare,
       downloadComparePdf,
+      downloadHistoryCompare,
       addDagEdge,
       dagEdgeDst,
       dagEdgeSrc,

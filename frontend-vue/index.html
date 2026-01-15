@@ -386,6 +386,8 @@
           <div style="margin-top:6px;">
             <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:8px;">
               <div class="badge">AI 輸出</div>
+              <button type="button" @click="downloadHistoryCompare('docx')">⬇️ 下載 Word</button>
+              <button type="button" @click="downloadHistoryCompare('pdf')">⬇️ 下載 PDF</button>
               <button type="button" @click="historyCompareEditing = !historyCompareEditing">{{ historyCompareEditing ? "關閉編輯" : "📝 編輯" }}</button>
             </div>
             <div v-if="!historyCompareEditing" class="markdown" v-html="historyCompareRendered"></div>
