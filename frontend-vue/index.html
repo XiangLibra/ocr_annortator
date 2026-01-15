@@ -342,7 +342,10 @@
     <div class="card">
       <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap;">
         <h3 style="margin:0;">📚 歷史紀錄</h3>
-        <button type="button" @click="fetchHistory">重新整理</button>
+        <div style="display:flex; gap:8px; flex-wrap:wrap;">
+          <button type="button" @click="downloadAllHistory" :disabled="historyExporting">⬇️ 下載匯出所有 OCR 檔案</button>
+          <button type="button" @click="fetchHistory">重新整理</button>
+        </div>
       </div>
       <div style="margin-top:6px; color:#667085; font-size:13px;">點選下方列表的「查看」後，內容會顯示在中間區塊。</div>
     </div>

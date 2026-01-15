@@ -323,6 +323,10 @@ function getPageImageSrc(page) {
   return page?.imageDataUrl || page?.imageUrl || "";
 }
 
+function sanitizeFileBase(name) {
+  return (name || "file").replace(/[\\/:*?"<>|]/g, "_");
+}
+
 async function downloadZip(fr) {
   const zip = new JSZip();
   const base = fr.filename.replace(/\.[^.]+$/, "");
@@ -346,6 +350,25 @@ async function downloadZip(fr) {
   a.click();
   a.remove();
   URL.revokeObjectURL(url);
+}
+
+async function appendRecordToZip(zip, fr) {
+  const rawBase = fr.filename || fr.fileId || "file";
+  const base = sanitizeFileBase(rawBase).replace(/\.[^.]+$/, "");
+  const folderName = `${base}_${(fr.fileId || "").slice(0, 8) || Date.now()}`;
+  const folder = zip.folder(folderName);
+  if (!folder) return;
+  folder.file(`${base}.txt`, buildExportText(fr));
+  folder.file(`${base}_readable.txt`, buildHumanReadableText(fr));
+  const imgFolder = folder.folder("images");
+  if (imgFolder) {
+    for (const p of fr.pages || []) {
+      const src = getPageImageSrc(p);
+      if (!src) continue;
+      const blob = await dataUrlToBlob(src);
+      imgFolder.file(`${base}_p${p.pageIndex}.png`, blob);
+    }
+  }
 }
 
 const TextDiff = {
@@ -790,6 +813,7 @@ createApp({
     const historyError = ref("");
     const historySelected = ref(null);
     const historyBatch = ref(null);
+    const historyExporting = ref(false);
     const historyCompare = ref(null);
     const historyCompareOriginalFinal = ref("");
     const historyCompareEditedFinal = ref("");
@@ -1010,6 +1034,71 @@ createApp({
         historyError.value = "載入歷史紀錄失敗";
       } finally {
         historyLoading.value = false;
+      }
+    }
+
+    async function collectHistoryFileIds(items) {
+      const ids = new Set();
+      for (const item of items || []) {
+        if (item.kind === "batch" || item.batchId) {
+          if (item.files?.length) {
+            item.files.forEach(f => { if (f?.fileId) ids.add(f.fileId); });
+          } else if (item.batchId) {
+            try {
+              const res = await axios.get(apiBase.value + `/api/ocr/history/batch/${item.batchId}`);
+              const files = res.data?.batch?.files || [];
+              files.forEach(f => { if (f?.fileId) ids.add(f.fileId); });
+            } catch (e) {
+              console.error("load batch files failed", e);
+            }
+          }
+        } else if (item.fileId) {
+          ids.add(item.fileId);
+        }
+      }
+      return Array.from(ids);
+    }
+
+    async function downloadAllHistory() {
+      if (historyExporting.value) return;
+      historyExporting.value = true;
+      try {
+        if (!historyItems.value?.length) {
+          await fetchHistory();
+        }
+        const items = historyItems.value || [];
+        if (!items.length) {
+          alert("沒有可匯出的歷史紀錄");
+          return;
+        }
+        const fileIds = await collectHistoryFileIds(items);
+        if (!fileIds.length) {
+          alert("沒有可匯出的檔案");
+          return;
+        }
+        const zip = new JSZip();
+        for (const id of fileIds) {
+          try {
+            const res = await axios.get(apiBase.value + `/api/ocr/history/file/${id}`);
+            const record = res.data?.item;
+            if (record) {
+              await appendRecordToZip(zip, record);
+            }
+          } catch (e) {
+            console.error("load record failed", id, e);
+          }
+        }
+        const zipBlob = await zip.generateAsync({ type: "blob" });
+        const url = URL.createObjectURL(zipBlob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = "ocr_history_all.zip";
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+      } finally {
+        historyExporting.value = false;
       }
     }
 
@@ -1588,6 +1677,7 @@ createApp({
       historyError,
       historySelected,
       historyBatch,
+      historyExporting,
       historyCompare,
       historyCompareOriginalFinal,
       historyCompareEditedFinal,
@@ -1620,6 +1710,7 @@ createApp({
       fetchHistory,
       viewHistory,
       deleteHistory,
+      downloadAllHistory,
       runChat,
       runHistoryChat,
       ensureCustomAgent,
