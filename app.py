@@ -295,7 +295,7 @@ class CompareOverride(BaseModel):
 
 
 class CompareOCRRequest(BaseModel):
-    fileIds: List[str] = Field(..., min_items=2, description="至少兩個 fileId")
+    fileIds: List[str] = Field(..., min_length=2, description="至少兩個 fileId")
     overrides: Optional[List[CompareOverride]] = None
     strategy: Optional[str] = Field(default="auto", description="auto|single|parallel|sequential")
     agents: Optional[List[str]] = None

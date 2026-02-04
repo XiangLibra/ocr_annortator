@@ -486,21 +486,85 @@ const PageCanvas = {
       emit("edited");
     }
 
-    function textPos(word, displayText) {
+    function rectsOverlap(a, b) {
+      return !(a.x + a.w <= b.x || b.x + b.w <= a.x || a.y + a.h <= b.y || b.y + b.h <= a.y);
+    }
+
+    function clamp(val, min, max) {
+      return Math.max(min, Math.min(max, val));
+    }
+
+    function estimateLabelRect(displayText, fontSize) {
+      const text = displayText || "";
+      let width = 0;
+      for (const ch of text) {
+        const isCjk = /[\u4e00-\u9fff]/.test(ch);
+        width += fontSize * (isCjk ? 1.0 : 0.6);
+      }
+      width = Math.max(40, Math.ceil(width + fontSize * 0.6 + 8));
+      const height = Math.max(16, Math.ceil(fontSize * 1.6));
+      return { width, height };
+    }
+
+    function findLabelPosition(word, displayText, words) {
       const x = word.bbox.x * scale.value;
       const y = word.bbox.y * scale.value;
       const ww = word.bbox.w * scale.value;
       const hh = word.bbox.h * scale.value;
       const stageW = props.page.width * scale.value;
+      const stageH = props.page.height * scale.value;
       const fontSize = Math.max(9, Math.round(12 * scale.value));
-      const roughCharW = 6 * Math.max(1, scale.value);
-      const estimated = Math.max(16, (displayText || "").length * roughCharW);
-      let tx = x + ww + 4;
-      if (tx + estimated > stageW - 6) {
-        tx = Math.max(4, x - estimated - 4);
+      const { width, height } = estimateLabelRect(displayText, fontSize);
+
+      const pad = Math.max(2, Math.round(2 * scale.value));
+      const blockers = (words || []).filter(w => w.id !== word.id).map(w => ({
+        x: w.bbox.x * scale.value - pad,
+        y: w.bbox.y * scale.value - pad,
+        w: w.bbox.w * scale.value + pad * 2,
+        h: w.bbox.h * scale.value + pad * 2,
+      }));
+
+      const rowBand = { y1: y - pad, y2: y + hh + pad };
+      const rightLimit = x + ww + width + 8;
+      const blockedRight = blockers.some(b => {
+        const overlapsRow = b.y < rowBand.y2 && (b.y + b.h) > rowBand.y1;
+        const isRightSide = b.x < rightLimit && (b.x + b.w) > (x + ww - pad);
+        return overlapsRow && isRightSide;
+      });
+
+      const candidates = [
+        ...(blockedRight ? [] : [{ x: x + ww + 6, y }]), // right
+        { x, y: y + hh + 6 },                             // below
+        { x: x - width - 6, y },                          // left
+        { x, y: y - height - 6 },                         // above
+      ];
+
+      const tryPlace = (cx, cy) => {
+        const px = clamp(cx, 4, Math.max(4, stageW - width - 4));
+        const py = clamp(cy, 4, Math.max(4, stageH - height - 4));
+        const rect = { x: px, y: py, w: width, h: height };
+        const hit = blockers.some(b => rectsOverlap(rect, b));
+        return hit ? null : { x: px, y: py, fontSize };
+      };
+
+      for (const c of candidates) {
+        const placed = tryPlace(c.x, c.y);
+        if (placed) return placed;
       }
-      const ty = y + hh / 2 - fontSize / 2;
-      return { x: tx, y: ty, fontSize };
+
+      // Fallback: scan downward from right position
+      const step = Math.max(6, Math.round(fontSize * 0.9));
+      let startX = clamp(x + ww + 6, 4, Math.max(4, stageW - width - 4));
+      for (let i = 0; i < 12; i++) {
+        const ny = y + i * step;
+        const placed = tryPlace(startX, ny);
+        if (placed) return placed;
+      }
+
+      // Last resort: place near the word without collision check
+      const fx = clamp(x + ww + 6, 4, Math.max(4, stageW - width - 4));
+      const fy = clamp(y, 4, Math.max(4, stageH - height - 4));
+      return { x: fx, y: fy, fontSize };
     }
 
     function renderShapes() {
@@ -511,7 +575,7 @@ const PageCanvas = {
 
       props.page.words.forEach(w => {
         const displayText = (w._edited && w._newText !== undefined) ? w._newText : w.text;
-        const pos = textPos(w, displayText);
+        const pos = findLabelPosition(w, displayText, props.page.words);
         const rect = new Konva.Rect({
           x: w.bbox.x * scale.value,
           y: w.bbox.y * scale.value,
