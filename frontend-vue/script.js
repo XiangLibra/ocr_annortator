@@ -1398,6 +1398,13 @@ createApp({
       }
     }
 
+    function scrollOuterToPage(fileId, pageIndex) {
+      const el = document.querySelector(`[data-file="${fileId}"][data-page="${pageIndex}"]`);
+      if (el) {
+        el.scrollIntoView({ behavior: "smooth", block: "center" });
+      }
+    }
+
     function handleCompareTableClick(event, fileIds) {
       const table = event?.target?.closest?.("table");
       if (!table) return;
@@ -1417,7 +1424,10 @@ createApp({
       const jump = compareJumpMap.value?.[fileId]?.[rowIndex];
       const match = jump || findWordMatch(fr, cell.innerText || "");
       if (!match) return;
-      triggerFlash(fileId, match.pageIndex, match.wordId);
+      scrollOuterToPage(fileId, match.pageIndex);
+      setTimeout(() => {
+        triggerFlash(fileId, match.pageIndex, match.wordId);
+      }, 120);
     }
 
     function triggerFlash(fileId, pageIndex, wordId) {
