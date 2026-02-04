@@ -429,8 +429,8 @@ const TextDiff = {
 
 const PageCanvas = {
   name: "PageCanvas",
-  props: { page: { type: Object, required: true }, highlightMap: { type: Object, default: () => ({}) } },
-  setup(props, { emit }) {
+  props: { page: { type: Object, required: true }, highlightMap: { type: Object, default: () => ({}) }, flashRequest: { type: Object, default: null } },
+  setup(props, { emit, expose }) {
     const wrapRef = ref(null);
     const stageHost = ref(null);
     const isAdding = ref(false);
@@ -441,6 +441,7 @@ const PageCanvas = {
     const editorRef = ref(null);
     const pendingNew = ref(null);
     const containerW = ref(800);
+    const flashId = ref(null);
     let stage, imageLayer, shapeLayer, uiLayer, imageNode, resizeObs;
     const rectRefs = new Map();
     let startPos = null;
@@ -611,14 +612,17 @@ const PageCanvas = {
         const displayText = (w._edited && w._newText !== undefined) ? w._newText : w.text;
         const pos = findLabelPosition(w, displayText, props.page.words);
         const highlightColor = props.highlightMap?.[w.id];
-        const strokeColor = highlightColor || "#2563eb";
+        const baseColor = highlightColor || "#2563eb";
+        const isFlash = flashId.value === w.id;
+        const strokeColor = isFlash ? "#f59e0b" : baseColor;
+        const strokeW = isFlash ? 4 : 2;
         const rect = new Konva.Rect({
           x: w.bbox.x * scale.value,
           y: w.bbox.y * scale.value,
           width: w.bbox.w * scale.value,
           height: w.bbox.h * scale.value,
           stroke: strokeColor,
-          strokeWidth: 2,
+          strokeWidth: strokeW,
           draggable: isModifying.value,
         });
         rect.on("mousedown", () => {
@@ -762,8 +766,46 @@ const PageCanvas = {
       });
     }
 
+    function flashWord(wordId) {
+      if (!wordId) return;
+      flashId.value = wordId;
+      renderShapes();
+      setTimeout(() => {
+        if (flashId.value === wordId) {
+          flashId.value = null;
+          renderShapes();
+        }
+      }, 700);
+    }
+
+    function scrollToWord(wordId) {
+      if (!wordId || !wrapRef.value) return;
+      const target = props.page.words.find(w => w.id === wordId);
+      if (!target) return;
+      const wordY = (target.bbox.y + (target.bbox.h || 0) / 2) * scale.value;
+      const scroller = wrapRef.value.closest?.(".file-body");
+      if (scroller) {
+        const wrapRect = wrapRef.value.getBoundingClientRect();
+        const scrollRect = scroller.getBoundingClientRect();
+        const withinScroll = (wrapRect.top - scrollRect.top) + wordY;
+        const top = Math.max(0, scroller.scrollTop + withinScroll - scroller.clientHeight / 2);
+        scroller.scrollTo({ top, behavior: "smooth" });
+      } else {
+        const rect = wrapRef.value.getBoundingClientRect();
+        const absY = window.scrollY + rect.top + wordY;
+        const top = Math.max(0, absY - window.innerHeight / 2);
+        window.scrollTo({ top, behavior: "smooth" });
+      }
+    }
+
     watch(() => props.page.words, () => renderShapes(), { deep: true });
     watch(() => props.highlightMap, () => renderShapes(), { deep: true });
+    watch(() => props.flashRequest, (val) => {
+      if (val?.wordId) {
+        scrollToWord(val.wordId);
+        flashWord(val.wordId);
+      }
+    }, { deep: true });
     watch(() => isModifying.value, () => renderShapes());
 
     onMounted(() => {
@@ -793,6 +835,8 @@ const PageCanvas = {
       if (stage) stage.destroy();
     });
 
+    expose({ flashWord });
+
     return {
       wrapRef,
       stageHost,
@@ -801,6 +845,7 @@ const PageCanvas = {
       selectedId,
       editing,
       editorRef,
+      flashWord,
       toggleAdd() {
         isAdding.value = !isAdding.value;
         if (isAdding.value) {
@@ -900,6 +945,7 @@ createApp({
     const compareEditing = ref(false);
     const compareFinalText = computed(() => normalizeText(compareEditedFinal.value || compareOriginalFinal.value || ""));
     const compareHighlights = ref({});
+    const compareJumpMap = ref({});
     const comparePairs = computed(() => {
       if (!compareSelected.value || compareSelected.value.length < 2) return [];
       const ids = compareSelected.value.slice(0, 2);
@@ -952,6 +998,7 @@ createApp({
     const historyChatInput = ref("");
     const historyChatHistory = ref([]);
     const historyChatSending = ref(false);
+    const flashRequests = ref({});
     const advancedOpen = ref(false);
     const advancedUseCustom = ref(true);
     const advancedCustomName = ref("__custom_adv_agent");
@@ -1114,6 +1161,7 @@ createApp({
         compareEditedFinal.value = "";
         compareEditing.value = false;
         compareHighlights.value = {};
+        compareJumpMap.value = {};
         chatHistory.value = [];
         // 預設勾選前兩個檔案以便快速比對
         autoSelectFirstTwo(list);
@@ -1316,10 +1364,76 @@ createApp({
       return (word?._edited && word._newText !== undefined) ? word._newText : word?.text;
     }
 
+    function tokenizeCellText(text) {
+      return (text || "")
+        .toString()
+        .replace(/[^\w\u4e00-\u9fff]+/g, " ")
+        .split(/\s+/)
+        .map(t => t.trim())
+        .filter(Boolean);
+    }
+
+    function findWordMatch(fr, cellText) {
+      if (!fr || !cellText) return null;
+      const tokens = tokenizeCellText(cellText);
+      if (!tokens.length) return null;
+      for (const token of tokens) {
+        for (const p of fr.pages || []) {
+          for (const w of p.words || []) {
+            const wtxt = (getWordDisplayText(w) || "").trim();
+            if (!wtxt) continue;
+            if (token === wtxt || token.includes(wtxt) || wtxt.includes(token)) {
+              return { pageIndex: p.pageIndex, wordId: w.id };
+            }
+          }
+        }
+      }
+      return null;
+    }
+
+    function scrollToPage(fileId, pageIndex) {
+      const el = document.querySelector(`[data-file="${fileId}"][data-page="${pageIndex}"]`);
+      if (el) {
+        el.scrollIntoView({ behavior: "smooth", block: "center" });
+      }
+    }
+
+    function handleCompareTableClick(event, fileIds) {
+      const table = event?.target?.closest?.("table");
+      if (!table) return;
+      const cell = event.target.closest("td,th");
+      if (!cell) return;
+      const row = cell.parentElement;
+      if (!row || row.parentElement?.tagName === "THEAD") return;
+      const cells = Array.from(row.children || []);
+      const colIndex = cells.indexOf(cell);
+      if (colIndex < 1 || colIndex > 2) return;
+      const fileId = fileIds?.[colIndex - 1];
+      if (!fileId) return;
+      const fr = items.value.find(x => x.fileId === fileId) || historySelected.value;
+      if (!fr) return;
+      const tbody = row.parentElement?.tagName === "TBODY" ? row.parentElement : null;
+      const rowIndex = tbody ? Array.from(tbody.children).indexOf(row) : -1;
+      const jump = compareJumpMap.value?.[fileId]?.[rowIndex];
+      const match = jump || findWordMatch(fr, cell.innerText || "");
+      if (!match) return;
+      triggerFlash(fileId, match.pageIndex, match.wordId);
+    }
+
+    function triggerFlash(fileId, pageIndex, wordId) {
+      if (!fileId || wordId === undefined || wordId === null) return;
+      const key = `${fileId}_${pageIndex}`;
+      flashRequests.value = {
+        ...flashRequests.value,
+        [key]: { wordId, tick: Date.now() }
+      };
+    }
+
     function buildCompareHighlightMap() {
       const table = parseMarkdownTable(compareFinalText.value || "");
       if (!table || !table.rows?.length) {
         compareHighlights.value = {};
+        compareJumpMap.value = {};
         return;
       }
       const rows = table.rows.map(cells => ({
@@ -1330,10 +1444,12 @@ createApp({
       }));
       const fileIds = compareSelected.value.slice(0, 2);
       const map = {};
+      const jumpMap = {};
       fileIds.forEach((fid, idx) => {
         const fr = items.value.find(x => x.fileId === fid);
         if (!fr) return;
         const highlight = {};
+        const rowTargets = {};
         fr.pages.forEach(p => {
           p.words.forEach(w => {
             const wordText = (getWordDisplayText(w) || "").trim();
@@ -1355,9 +1471,16 @@ createApp({
             }
           });
         });
+        rows.forEach((row, rowIndex) => {
+          const cellText = idx === 0 ? row.file1 : row.file2;
+          const match = findWordMatch(fr, cellText);
+          if (match) rowTargets[rowIndex] = match;
+        });
         map[fid] = highlight;
+        jumpMap[fid] = rowTargets;
       });
       compareHighlights.value = map;
+      compareJumpMap.value = jumpMap;
     }
 
     async function handleSave(fr) {
@@ -1483,6 +1606,7 @@ createApp({
       if (compareSelected.value.length < 2) return alert("請至少選兩個 OCR 檔案");
       await ensureCustomAgent();
       compareLoading.value = true;
+      compareHighlights.value = {};
       try {
         const overrides = compareSelected.value
           .map(id => {
@@ -1808,7 +1932,7 @@ createApp({
 
     watch([dagEdges, dagEntry, dagOutputs], () => renderDagMermaid(), { deep: true });
     watch(compareFinalText, () => buildCompareHighlightMap());
-    watch(compareResult, (val) => { if (!val) compareHighlights.value = {}; });
+    watch(compareResult, (val) => { if (!val) { compareHighlights.value = {}; compareJumpMap.value = {}; } });
     watch(activeTab, (v) => { if (v === "history") fetchHistory(); });
     watch(mermaidPreview, () => renderMermaid(), { flush: "post", immediate: true });
     watch(advancedOpen, (v) => { if (v) { renderMermaid(); renderDagMermaid(); } }, { flush: "post" });
@@ -1840,9 +1964,11 @@ createApp({
       compareEditing,
       compareFinalText,
       compareHighlights,
+      compareJumpMap,
       compareDiffParts,
       compareRendered,
       comparePairs,
+      flashRequests,
       mermaidSvg,
       chatInput,
       chatStrategy,
@@ -1902,6 +2028,7 @@ createApp({
       downloadComparePdf,
       downloadHistoryCompare,
       addDagEdge,
+      handleCompareTableClick,
       dagEdgeDst,
       dagEdgeSrc,
       dagEdges,

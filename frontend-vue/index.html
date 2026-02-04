@@ -52,8 +52,13 @@
       <div v-for="fr in items" :key="fr.fileId" class="file-block">
         <h2 style="margin: 6px 0 8px;">{{ fr.filename }}</h2>
         <div class="file-body">
-          <div v-for="page in fr.pages" :key="page.pageIndex" class="page-card">
-            <page-canvas :page="page" :highlight-map="compareResult ? compareHighlights[fr.fileId] : null" @edited="updateDiff(fr)" />
+          <div v-for="page in fr.pages" :key="page.pageIndex" class="page-card"
+               :data-file="fr.fileId" :data-page="page.pageIndex">
+            <page-canvas
+              :page="page"
+              :highlight-map="compareResult ? compareHighlights[fr.fileId] : null"
+              :flash-request="flashRequests[fr.fileId + '_' + page.pageIndex]"
+              @edited="updateDiff(fr)" />
           </div>
 
           <div style="margin-top: 10px;">
@@ -107,7 +112,7 @@
                   <button type="button" @click="downloadCompare('pdf')">⬇️ 下載 PDF</button>
                   <button type="button" @click="compareEditing = !compareEditing">{{ compareEditing ? "關閉編輯" : "📝 編輯" }}</button>
                 </div>
-                <div v-if="!compareEditing" class="markdown" v-html="compareRendered"></div>
+                <div v-if="!compareEditing" class="markdown" v-html="compareRendered" @click="handleCompareTableClick($event, compareSelected.slice(0,2))"></div>
                 <div v-else class="edit-grid" style="margin-top:12px;">
                   <div class="edit-cell">
                     <label>左側：編輯區</label>
@@ -115,7 +120,7 @@
                   </div>
                   <div class="edit-cell">
                     <label>右側：Markdown 預覽</label>
-                    <div class="markdown edit-preview" v-html="compareRendered"></div>
+                    <div class="markdown edit-preview" v-html="compareRendered" @click="handleCompareTableClick($event, compareSelected.slice(0,2))"></div>
                   </div>
                   <div class="edit-diff">
                     <div class="badge" style="margin-top:6px;">差異 Diff</div>
@@ -442,8 +447,13 @@
           <button type="button" @click="historySelected = null">返回列表</button>
         </div>
         <div class="file-body">
-          <div v-for="page in historySelected.pages" :key="page.pageIndex" class="page-card">
-            <page-canvas :page="page" :highlight-map="historyCompare ? compareHighlights[historySelected.fileId] : null" @edited="updateDiff(historySelected)" />
+          <div v-for="page in historySelected.pages" :key="page.pageIndex" class="page-card"
+               :data-file="historySelected.fileId" :data-page="page.pageIndex">
+            <page-canvas
+              :page="page"
+              :highlight-map="historyCompare ? compareHighlights[historySelected.fileId] : null"
+              :flash-request="flashRequests[historySelected.fileId + '_' + page.pageIndex]"
+              @edited="updateDiff(historySelected)" />
           </div>
 
           <div style="margin-top: 10px;">
