@@ -55,6 +55,40 @@ function wrapHtmlBody(body) {
 </html>`;
 }
 
+function parseTableLine(line) {
+  if (!line || !line.includes("|")) return [];
+  const trimmed = line.trim();
+  return trimmed.replace(/^\|/, "").replace(/\|$/, "").split("|").map(s => s.trim());
+}
+
+function parseMarkdownTable(md) {
+  const lines = (md || "").split(/\r?\n/);
+  for (let i = 0; i < lines.length - 1; i++) {
+    const header = lines[i];
+    const sep = lines[i + 1] || "";
+    if (!header.includes("|")) continue;
+    if (!/^\s*\|?\s*:?-{3,}/.test(sep)) continue;
+    const headers = parseTableLine(header);
+    const rows = [];
+    for (let j = i + 2; j < lines.length; j++) {
+      const rowLine = lines[j];
+      if (!rowLine.includes("|")) break;
+      const cells = parseTableLine(rowLine);
+      if (cells.length) rows.push(cells);
+    }
+    if (headers.length && rows.length) {
+      return { headers, rows };
+    }
+  }
+  return null;
+}
+
+function normalizeCellText(text) {
+  const t = (text || "").toString().replace(/\s+/g, " ").trim();
+  if (!t || t === "-" || t === "—" || t.toLowerCase() === "n/a") return "";
+  return t;
+}
+
 async function buildDocxFromHtml(htmlContent) {
   const html = wrapHtmlBody(htmlContent || "");
   const zip = new JSZip();
@@ -395,7 +429,7 @@ const TextDiff = {
 
 const PageCanvas = {
   name: "PageCanvas",
-  props: { page: { type: Object, required: true } },
+  props: { page: { type: Object, required: true }, highlightMap: { type: Object, default: () => ({}) } },
   setup(props, { emit }) {
     const wrapRef = ref(null);
     const stageHost = ref(null);
@@ -576,14 +610,28 @@ const PageCanvas = {
       props.page.words.forEach(w => {
         const displayText = (w._edited && w._newText !== undefined) ? w._newText : w.text;
         const pos = findLabelPosition(w, displayText, props.page.words);
+        const highlightColor = props.highlightMap?.[w.id];
+        const strokeColor = highlightColor || "#2563eb";
         const rect = new Konva.Rect({
           x: w.bbox.x * scale.value,
           y: w.bbox.y * scale.value,
           width: w.bbox.w * scale.value,
           height: w.bbox.h * scale.value,
-          stroke: "red",
+          stroke: strokeColor,
           strokeWidth: 2,
           draggable: isModifying.value,
+        });
+        rect.on("mousedown", () => {
+          if (isModifying.value) {
+            selectedId.value = w.id;
+            attachTransformer();
+          }
+        });
+        rect.on("dragstart", () => {
+          if (isModifying.value) {
+            selectedId.value = w.id;
+            attachTransformer();
+          }
         });
         rect.on("click", () => {
           if (isModifying.value) {
@@ -613,7 +661,7 @@ const PageCanvas = {
           x: pos.x,
           y: pos.y,
           fontSize: pos.fontSize,
-          fill: "red",
+          fill: strokeColor,
         });
         text.on("click", () => openEditor(w));
         shapeLayer.add(text);
@@ -715,6 +763,7 @@ const PageCanvas = {
     }
 
     watch(() => props.page.words, () => renderShapes(), { deep: true });
+    watch(() => props.highlightMap, () => renderShapes(), { deep: true });
     watch(() => isModifying.value, () => renderShapes());
 
     onMounted(() => {
@@ -850,6 +899,7 @@ createApp({
     const compareEditedFinal = ref("");
     const compareEditing = ref(false);
     const compareFinalText = computed(() => normalizeText(compareEditedFinal.value || compareOriginalFinal.value || ""));
+    const compareHighlights = ref({});
     const comparePairs = computed(() => {
       if (!compareSelected.value || compareSelected.value.length < 2) return [];
       const ids = compareSelected.value.slice(0, 2);
@@ -861,6 +911,10 @@ createApp({
         })
         .filter(Boolean);
     });
+    const compareHighlightColors = {
+      same: "#1f9d55",
+      diff: "#e25555",
+    };
     const uploadedNames = ref([]);
     const dropHint = ref("拖曳檔案到此（最多 2 個 PDF/圖片），或點下方按鈕選擇");
     const chatInput = ref("");
@@ -1059,6 +1113,7 @@ createApp({
         compareOriginalFinal.value = "";
         compareEditedFinal.value = "";
         compareEditing.value = false;
+        compareHighlights.value = {};
         chatHistory.value = [];
         // 預設勾選前兩個檔案以便快速比對
         autoSelectFirstTwo(list);
@@ -1257,6 +1312,54 @@ createApp({
       };
     }
 
+    function getWordDisplayText(word) {
+      return (word?._edited && word._newText !== undefined) ? word._newText : word?.text;
+    }
+
+    function buildCompareHighlightMap() {
+      const table = parseMarkdownTable(compareFinalText.value || "");
+      if (!table || !table.rows?.length) {
+        compareHighlights.value = {};
+        return;
+      }
+      const rows = table.rows.map(cells => ({
+        item: cells[0] || "",
+        file1: cells[1] || "",
+        file2: cells[2] || "",
+        diff: cells[3] || ""
+      }));
+      const fileIds = compareSelected.value.slice(0, 2);
+      const map = {};
+      fileIds.forEach((fid, idx) => {
+        const fr = items.value.find(x => x.fileId === fid);
+        if (!fr) return;
+        const highlight = {};
+        fr.pages.forEach(p => {
+          p.words.forEach(w => {
+            const wordText = (getWordDisplayText(w) || "").trim();
+            if (!wordText) return;
+            for (const row of rows) {
+              const f1 = normalizeCellText(row.file1);
+              const f2 = normalizeCellText(row.file2);
+              if (!f1 && !f2) continue;
+              const same = f1 && f2 && f1 === f2;
+              const cellText = idx === 0 ? f1 : f2;
+              if (!cellText) continue;
+              if (cellText.includes(wordText)) {
+                const color = same ? compareHighlightColors.same : compareHighlightColors.diff;
+                if (color === compareHighlightColors.diff || !highlight[w.id]) {
+                  highlight[w.id] = color;
+                }
+                break;
+              }
+            }
+          });
+        });
+        map[fid] = highlight;
+      });
+      compareHighlights.value = map;
+    }
+
     async function handleSave(fr) {
       const edits = [];
       fr.pages.forEach(p => p.words.forEach(w => {
@@ -1402,6 +1505,7 @@ createApp({
         compareOriginalFinal.value = finalTxt;
         compareEditedFinal.value = compareOriginalFinal.value;
         compareEditing.value = false;
+        buildCompareHighlightMap();
       } catch (e) {
         alert("比對失敗，請稍後再試");
       } finally {
@@ -1703,6 +1807,8 @@ createApp({
     }
 
     watch([dagEdges, dagEntry, dagOutputs], () => renderDagMermaid(), { deep: true });
+    watch(compareFinalText, () => buildCompareHighlightMap());
+    watch(compareResult, (val) => { if (!val) compareHighlights.value = {}; });
     watch(activeTab, (v) => { if (v === "history") fetchHistory(); });
     watch(mermaidPreview, () => renderMermaid(), { flush: "post", immediate: true });
     watch(advancedOpen, (v) => { if (v) { renderMermaid(); renderDagMermaid(); } }, { flush: "post" });
@@ -1733,6 +1839,7 @@ createApp({
       compareEditedFinal,
       compareEditing,
       compareFinalText,
+      compareHighlights,
       compareDiffParts,
       compareRendered,
       comparePairs,
