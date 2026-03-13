@@ -92,6 +92,12 @@ http://127.0.0.1:8000
 
 http://127.0.0.1:8000/docs
 
+## 也可以將網站運行到終端後台來使用（可選）
+```bash
+fuser -k 8000/tcp; nohup uv run uvicorn app:app --port 8000 > app.log 2>&1 &
+```
+
+
 💡 若需 OCR 支援
 ```bash
 sudo apt install tesseract-ocr

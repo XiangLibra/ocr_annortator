@@ -335,6 +335,7 @@ def dag_to_mermaid(cfg: DAGConfig) -> str:
 
 
 app = FastAPI(title="Multi-Agent OCR Backend (FastAPI)")
+# app = FastAPI(root_path="/ocrmatch")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
