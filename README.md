@@ -97,6 +97,10 @@ http://127.0.0.1:8000/docs
 fuser -k 8000/tcp; nohup uv run uvicorn app:app --port 8000 > app.log 2>&1 &
 ```
 
+## 若ollama還沒在後台執行，可以用以下命令
+```bash
+nohup ollama serve > ollama.log 2>&1 &
+```
 
 💡 若需 OCR 支援
 ```bash
