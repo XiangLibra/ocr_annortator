@@ -928,7 +928,10 @@ createApp({
   setup() {
     // const apiBase = ref("http://127.0.0.1:8000");
     // 自動抓取當前瀏覽器網址的 IP，並連向 8000 埠
-    const apiBase = ref(`${window.location.protocol}//${window.location.hostname}:8000`);
+    // const apiBase = ref(`${window.location.protocol}//${window.location.hostname}`);
+    const apiBase = ref(window.location.origin); 
+    console.log("API base URL set to:", apiBase.value);
+    
     //  const apiBase = ref("https://ocrmatch.vghtced.com.tw"); 
     const language = ref("繁體中文");
     const loading = ref(false);
