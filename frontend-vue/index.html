@@ -265,15 +265,13 @@
                     </thead>
                     <tbody>
                       <tr v-for="field in customFields" :key="field"
-                          :style="{ background: Object.keys(fieldExtractResults).length > 1 &&
-                            new Set(Object.values(fieldExtractResults).map(r => (r.extracted?.[field] ?? '').toString().trim())).size > 1
-                            ? '#fff0f0' : 'white' }">
+                          :style="{ background: fieldConflicts.has(field) ? '#fff0f0' : 'white' }">
                         <td style="padding:6px 10px; border:1px solid #dde3f0; font-weight:600; white-space:nowrap;">{{ field }}</td>
                         <td v-for="(info, fid) in fieldExtractResults" :key="fid"
+                            :data-file-id="fid"
+                            class="field-extract-cell"
                             style="padding:6px 10px; border:1px solid #dde3f0; word-break:break-all; cursor:pointer;"
-                            :title="info.extracted?.[field] ? '點擊跳至圖片位置' : ''"
-                            @mouseenter="$event.target.style.background='#eef5ff'"
-                            @mouseleave="$event.target.style.background=''">
+                            :title="info.extracted?.[field] ? '點擊跳至圖片位置' : ''">
                           {{ info.extracted?.[field] ?? '—' }}
                         </td>
                       </tr>
@@ -531,9 +529,15 @@
             <span v-else-if="trainingJob.status === 'error'" style="color:#e25555;">❌ 訓練失敗</span>
           </span>
           <span style="font-size:12px; color:#667085;">{{ trainingJob.message }}</span>
-          <button @click="trainingLogOpen = !trainingLogOpen" style="background:#667085; font-size:11px; padding:2px 8px; margin-left:auto;">
-            {{ trainingLogOpen ? '收起 Log' : '展開 Log' }}
-          </button>
+          <div style="display:flex; gap:6px; margin-left:auto;">
+            <a :href="apiBase + '/training'" target="_blank"
+               style="font-size:11px; padding:2px 10px; background:#7c5cbf; color:#fff; border-radius:6px; text-decoration:none; line-height:1.8;">
+              📊 查看訓練過程
+            </a>
+            <button @click="trainingLogOpen = !trainingLogOpen" style="background:#667085; font-size:11px; padding:2px 8px;">
+              {{ trainingLogOpen ? '收起 Log' : '展開 Log' }}
+            </button>
+          </div>
         </div>
         <div v-if="trainingLogOpen"
              style="background:#1e1e2e; color:#cdd6f4; font-family:monospace; font-size:12px; border-radius:8px; padding:10px; max-height:280px; overflow-y:auto; line-height:1.6;">
@@ -565,6 +569,7 @@
               <th style="padding:6px 10px; border-bottom:1px solid #dde3f0;">最佳 Loss</th>
               <th style="padding:6px 10px; border-bottom:1px solid #dde3f0;">迭代</th>
               <th style="padding:6px 10px; border-bottom:1px solid #dde3f0;">狀態</th>
+              <th style="padding:6px 10px; border-bottom:1px solid #dde3f0;">訓練記錄</th>
               <th style="padding:6px 10px; border-bottom:1px solid #dde3f0;">操作</th>
             </tr>
           </thead>
@@ -592,6 +597,12 @@
                   啟用中
                 </span>
                 <span v-else style="color:#aaa; font-size:12px;">未啟用</span>
+              </td>
+              <td style="padding:6px 10px; border-bottom:1px solid #f0f2f8;">
+                <a :href="apiBase + '/training?version_id=' + v.version_id" target="_blank"
+                   style="font-size:12px; padding:3px 10px; background:#4a6fa5; color:#fff; border-radius:6px; text-decoration:none; white-space:nowrap;">
+                  📊 查看
+                </a>
               </td>
               <td style="padding:6px 10px; border-bottom:1px solid #f0f2f8;">
                 <button v-if="!v.is_active"

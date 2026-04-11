@@ -38,7 +38,6 @@ MONGO_DB  = "ocr_insight"
 
 
 def run(cmd: list[str], cwd=None, check=True, extra_env=None):
-    import os
     print(f"  $ {' '.join(str(c) for c in cmd)}")
     env = os.environ.copy()
     env["TESSDATA_PREFIX"] = str(TESSDATA_LOCAL)
@@ -46,11 +45,11 @@ def run(cmd: list[str], cwd=None, check=True, extra_env=None):
         env.update(extra_env)
     result = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, env=env)
     if result.stdout.strip():
-        print("   ", result.stdout.strip()[:300])
-    if result.returncode != 0:
-        print("   STDERR:", result.stderr.strip()[:300])
-        if check:
-            raise RuntimeError(f"指令失敗: {' '.join(str(c) for c in cmd)}")
+        print("   ", result.stdout.strip()[:500])
+    if result.stderr.strip():
+        print("   STDERR:", result.stderr.strip()[:500])
+    if result.returncode != 0 and check:
+        raise RuntimeError(f"指令失敗: {' '.join(str(c) for c in cmd)}")
     return result
 
 
@@ -240,11 +239,11 @@ def extract_lstm() -> Path:
 
 
 def fine_tune(lstm_path: Path, list_file: Path) -> Path:
-    """執行 lstmtraining fine-tune"""
+    """執行 lstmtraining fine-tune，即時串流 stderr 輸出（含訓練指標）"""
     src_traineddata = TESSDATA_LOCAL / f"{LANG}.traineddata"
     checkpoint_prefix = MODEL_DIR / f"{LANG}_ft"
 
-    run([
+    cmd = [
         "lstmtraining",
         f"--model_output={checkpoint_prefix}",
         f"--continue_from={lstm_path}",
@@ -252,7 +251,26 @@ def fine_tune(lstm_path: Path, list_file: Path) -> Path:
         f"--train_listfile={list_file}",
         f"--max_iterations={MAX_ITER}",
         "--debug_interval=0",
-    ])
+    ]
+    print(f"  $ {' '.join(str(c) for c in cmd)}")
+    env = os.environ.copy()
+    env["TESSDATA_PREFIX"] = str(TESSDATA_LOCAL)
+
+    # lstmtraining 把訓練進度（At iteration...）輸出到 stderr，需要即時串流才能被上層捕捉
+    proc = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,   # 合併 stderr → stdout，方便逐行讀取
+        text=True,
+        env=env,
+    )
+    for line in proc.stdout:
+        line = line.rstrip()
+        if line:
+            print(line, flush=True)
+    proc.wait()
+    if proc.returncode != 0:
+        raise RuntimeError(f"lstmtraining 失敗（exit code {proc.returncode}）")
 
     checkpoint = Path(f"{checkpoint_prefix}_checkpoint")
     if not checkpoint.exists():

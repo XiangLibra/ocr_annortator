@@ -1,0 +1,436 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Tesseract 訓練監控</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.2/dist/chart.umd.min.js"></script>
+  <style>
+    :root { color-scheme: light; font-family: "Segoe UI","PingFang TC","Noto Sans TC",Arial,sans-serif; }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: #0f1117; color: #cdd6f4; min-height: 100vh; }
+
+    header {
+      background: #1e1e2e;
+      border-bottom: 1px solid #313244;
+      padding: 14px 24px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+    header h1 { margin: 0; font-size: 17px; color: #cba6f7; white-space: nowrap; }
+    #version-name { font-size: 13px; color: #89b4fa; }
+    #status-badge {
+      padding: 4px 12px; border-radius: 20px; font-size: 13px; font-weight: 600;
+    }
+    .st-idle    { background: #313244; color: #a6adc8; }
+    .st-running { background: #d97706; color: #fff; }
+    .st-done    { background: #2d8a4e; color: #fff; }
+    .st-error   { background: #e25555; color: #fff; }
+    .st-history { background: #4a6fa5; color: #fff; }
+
+    #api-row { margin-left: auto; display: flex; align-items: center; gap: 8px; font-size: 13px; }
+    #api-row input { background: #313244; border: 1px solid #45475a; color: #cdd6f4; border-radius: 6px; padding: 4px 8px; width: 240px; }
+
+    main { display: grid; grid-template-columns: 1fr 320px; gap: 16px; padding: 20px 24px; }
+
+    .panel { background: #1e1e2e; border: 1px solid #313244; border-radius: 10px; padding: 16px; }
+    .panel-title { font-size: 12px; font-weight: 700; color: #89b4fa; margin-bottom: 12px;
+                   letter-spacing: .05em; text-transform: uppercase; }
+
+    #stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 16px; }
+    .stat-card { background: #181825; border: 1px solid #313244; border-radius: 8px; padding: 10px 14px; }
+    .stat-label { font-size: 11px; color: #6c7086; margin-bottom: 4px; text-transform: uppercase; letter-spacing: .04em; }
+    .stat-value { font-size: 18px; font-weight: 700; color: #cdd6f4; }
+    .stat-value.green { color: #a6e3a1; }
+    .stat-value.amber { color: #fab387; }
+
+    #chart-wrap { position: relative; height: 240px; }
+    #no-data { position: absolute; inset: 0; display: flex; align-items: center;
+               justify-content: center; color: #45475a; font-size: 13px; pointer-events: none; }
+
+    #log {
+      background: #11111b; border-radius: 8px; padding: 12px;
+      font-family: "Cascadia Code","Fira Code","Consolas",monospace;
+      font-size: 12px; line-height: 1.65; overflow-y: auto;
+      height: calc(100vh - 320px); min-height: 180px;
+    }
+    .log-line { white-space: pre-wrap; word-break: break-all; }
+    .log-ok      { color: #a6e3a1; }
+    .log-err     { color: #f38ba8; }
+    .log-cmd     { color: #89b4fa; }
+    .log-metric  { color: #cba6f7; }
+    .log-warn    { color: #fab387; }
+    .log-default { color: #cdd6f4; }
+
+    #right { display: flex; flex-direction: column; gap: 14px; }
+    #metrics-list { display: flex; flex-direction: column; gap: 6px; max-height: 340px; overflow-y: auto; }
+    .metric-row { display: flex; justify-content: space-between; align-items: center;
+                  background: #181825; border-radius: 6px; padding: 5px 10px; font-size: 12px; }
+    .metric-row .iter { color: #6c7086; font-size: 11px; }
+    .metric-row .bcer { color: #cba6f7; font-weight: 700; }
+    .metric-row .rms  { color: #89b4fa; font-size: 11px; }
+    .best-row { border: 1px solid #cba6f7; }
+
+    #auto-scroll-label { font-size: 12px; color: #6c7086; display: flex; align-items: center; gap: 6px; cursor: pointer; margin-top: 6px; }
+    #auto-scroll-label input { cursor: pointer; }
+
+    #poll-indicator { font-size: 11px; color: #45475a; margin-left: auto; }
+    .blink { animation: blink 1s step-start infinite; }
+    @keyframes blink { 50% { opacity: 0; } }
+  </style>
+</head>
+<body>
+<header>
+  <h1>🧠 Tesseract LSTM 訓練監控</h1>
+  <span id="version-name"></span>
+  <span id="status-badge" class="st-idle">idle</span>
+  <span id="header-msg" style="font-size:12px; color:#6c7086;"></span>
+  <span id="poll-indicator"></span>
+  <div id="api-row">
+    <label style="color:#6c7086; font-size:12px;">API</label>
+    <input id="api-input" type="text" placeholder="http://127.0.0.1:8000" />
+  </div>
+</header>
+
+<main>
+  <div style="display:flex; flex-direction:column; gap:14px;">
+
+    <div id="stats">
+      <div class="stat-card">
+        <div class="stat-label">版本 ID</div>
+        <div class="stat-value" id="s-jobid" style="font-size:13px; word-break:break-all;">—</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">訓練時間</div>
+        <div class="stat-value" id="s-started" style="font-size:12px;">—</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">最佳 BCER</div>
+        <div class="stat-value green" id="s-best-bcer">—</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">訓練筆數</div>
+        <div class="stat-value amber" id="s-pairs">—</div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-title">📈 BCER 訓練曲線（字元錯誤率，越低越好）</div>
+      <div id="chart-wrap">
+        <canvas id="chart"></canvas>
+        <div id="no-data">尚無訓練指標資料</div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div style="display:flex; align-items:center; gap:8px; margin-bottom:10px;">
+        <div class="panel-title" style="margin:0;">📟 訓練 Log</div>
+        <span id="log-count" style="font-size:11px; color:#6c7086;"></span>
+        <button onclick="clearLogDisplay()" style="font-size:11px; padding:2px 8px; background:#313244; border:none; color:#cdd6f4; border-radius:5px; cursor:pointer; margin-left:auto;">清空顯示</button>
+      </div>
+      <div id="log"><span style="color:#45475a; font-style:italic;">等待訓練輸出…</span></div>
+      <label id="auto-scroll-label"><input type="checkbox" id="auto-scroll" checked> 自動滾動到底部</label>
+    </div>
+  </div>
+
+  <div id="right">
+    <div class="panel">
+      <div class="panel-title">📊 逐次迭代指標</div>
+      <div id="metrics-list"><div style="color:#45475a; font-size:13px; font-style:italic;">尚無資料</div></div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-title">ℹ️ 說明</div>
+      <div style="font-size:12px; color:#a6adc8; line-height:1.9;">
+        <div>• <span style="color:#cba6f7;">BCER</span> = 字元錯誤率，目標 &lt;5%</div>
+        <div>• <span style="color:#89b4fa;">Mean rms</span> = 均方根誤差</div>
+        <div>• <span style="color:#fab387;">delta</span> = 參數更新幅度</div>
+        <div style="margin-top:6px; color:#6c7086; font-size:11px;" id="mode-hint"></div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-title">🔗 快速連結</div>
+      <div style="display:flex; flex-direction:column; gap:8px; font-size:13px;">
+        <a href="/" target="_blank" style="color:#89b4fa; text-decoration:none;">← 返回主頁面</a>
+        <a id="link-docs" href="/docs" target="_blank" style="color:#89b4fa; text-decoration:none;">📄 API 文件</a>
+      </div>
+    </div>
+  </div>
+</main>
+
+<script>
+// ── 讀取 URL 參數 ────────────────────────────────────────────
+const urlParams = new URLSearchParams(location.search);
+const VERSION_ID = urlParams.get("version_id") || null;
+const isHistoryMode = !!VERSION_ID;
+
+const apiInput = document.getElementById("api-input");
+apiInput.value = urlParams.get("api") || window.location.origin;
+function apiBase() { return apiInput.value.replace(/\/$/, ""); }
+
+// ── Chart.js ─────────────────────────────────────────────────
+const ctx = document.getElementById("chart").getContext("2d");
+const chartData = {
+  labels: [],
+  datasets: [
+    {
+      label: "BCER train (%)",
+      data: [],
+      borderColor: "#cba6f7",
+      backgroundColor: "rgba(203,166,247,.15)",
+      tension: 0.3,
+      pointRadius: 2,
+      pointHoverRadius: 5,
+      fill: true,
+      yAxisID: "y",
+    },
+    {
+      label: "Mean rms (%)",
+      data: [],
+      borderColor: "#89b4fa",
+      backgroundColor: "transparent",
+      tension: 0.3,
+      pointRadius: 1,
+      fill: false,
+      yAxisID: "y",
+    },
+  ],
+};
+const chart = new Chart(ctx, {
+  type: "line",
+  data: chartData,
+  options: {
+    responsive: true,
+    maintainAspectRatio: false,
+    animation: { duration: 0 },
+    plugins: {
+      legend: { labels: { color: "#cdd6f4", font: { size: 12 }, boxWidth: 14 } },
+      tooltip: {
+        backgroundColor: "#313244",
+        titleColor: "#cdd6f4",
+        bodyColor: "#a6adc8",
+        callbacks: {
+          label: ctx => ` ${ctx.dataset.label}: ${ctx.parsed.y != null ? ctx.parsed.y.toFixed(3) + "%" : "N/A"}`
+        }
+      },
+    },
+    scales: {
+      x: {
+        title: { display: true, text: "Iteration", color: "#6c7086", font: { size: 11 } },
+        ticks: { color: "#6c7086", maxTicksLimit: 8, font: { size: 11 } },
+        grid: { color: "#1e1e2e" },
+      },
+      y: {
+        title: { display: true, text: "Error (%)", color: "#6c7086", font: { size: 11 } },
+        ticks: { color: "#6c7086", font: { size: 11 } },
+        grid: { color: "#252536" },
+        min: 0,
+        suggestedMax: 100,
+      },
+    },
+  },
+});
+
+// ── 狀態 ─────────────────────────────────────────────────────
+let metrics = [];       // [{ iter, bcer, rms, delta, best }]
+let renderedLines = 0;
+
+// ── Log 解析 ─────────────────────────────────────────────────
+function parseMetricLine(line) {
+  // Tesseract lstmtraining 格式:
+  // "At iteration 50/400/400, Mean rms=2.845%, delta=8.155%, BCER train=28.619%, BWER train=75%, skip ratio=0%,"
+  const iterM = line.match(/At iteration\s+(\d+)/i);
+  if (!iterM) return null;
+  const bcer  = line.match(/BCER\s+train\s*=\s*([\d.]+)%/i);
+  if (!bcer) return null;
+  const rms   = line.match(/Mean\s+rms\s*=\s*([\d.]+)%/i);
+  const delta = line.match(/delta\s*=\s*([\d.]+)%/i);
+  const best  = /New best/.test(line);
+  return {
+    iter:  parseInt(iterM[1]),
+    bcer:  parseFloat(bcer[1]),
+    rms:   rms   ? parseFloat(rms[1])   : null,
+    delta: delta ? parseFloat(delta[1]) : null,
+    best,
+  };
+}
+
+function lineClass(line) {
+  if (/✅|完成|Best model|New best/.test(line)) return "log-ok";
+  if (/❌|失敗|STDERR:|Error:|Traceback/.test(line)) return "log-err";
+  if (/^\s*\$\s/.test(line)) return "log-cmd";
+  if (/At iteration/i.test(line)) return "log-metric";
+  if (/⚠️|warning|Warning/.test(line)) return "log-warn";
+  return "log-default";
+}
+
+// ── 渲染 ─────────────────────────────────────────────────────
+function renderNewLogLines(lines) {
+  const logEl = document.getElementById("log");
+  if (renderedLines === 0) logEl.innerHTML = "";   // 清掉佔位文字
+
+  const frag = document.createDocumentFragment();
+  for (let i = renderedLines; i < lines.length; i++) {
+    const div = document.createElement("div");
+    div.className = "log-line " + lineClass(lines[i]);
+    div.textContent = lines[i];
+    frag.appendChild(div);
+  }
+  logEl.appendChild(frag);
+  renderedLines = lines.length;
+  document.getElementById("log-count").textContent = `${lines.length} 行`;
+
+  if (document.getElementById("auto-scroll").checked) {
+    logEl.scrollTop = logEl.scrollHeight;
+  }
+}
+
+function rebuildMetrics(lines) {
+  const map = new Map();
+  for (const line of lines) {
+    const m = parseMetricLine(line);
+    if (m) map.set(m.iter, m);
+  }
+  metrics = [...map.values()].sort((a, b) => a.iter - b.iter);
+}
+
+function updateChart() {
+  const noData = document.getElementById("no-data");
+  if (metrics.length === 0) { noData.style.display = "flex"; return; }
+  noData.style.display = "none";
+
+  chartData.labels = metrics.map(m => m.iter);
+  chartData.datasets[0].data = metrics.map(m => m.bcer);
+  chartData.datasets[1].data = metrics.map(m => m.rms ?? null);
+
+  // 動態 Y 軸上限（最大值 × 1.15，至少 10）
+  const maxBcer = Math.max(...metrics.map(m => m.bcer), 0);
+  chart.options.scales.y.suggestedMax = Math.max(maxBcer * 1.15, 10);
+  chart.update("none");
+}
+
+function updateMetricList() {
+  const el = document.getElementById("metrics-list");
+  if (metrics.length === 0) {
+    el.innerHTML = '<div style="color:#45475a; font-size:13px; font-style:italic;">尚無資料</div>';
+    return;
+  }
+  const bestBcer = Math.min(...metrics.map(m => m.bcer));
+  el.innerHTML = [...metrics].reverse().slice(0, 60).map(m => `
+    <div class="metric-row ${m.bcer === bestBcer ? 'best-row' : ''}">
+      <span class="iter">iter ${m.iter}</span>
+      <span class="bcer">BCER ${m.bcer.toFixed(3)}%${m.best ? " ⭐" : ""}</span>
+      ${m.rms != null ? `<span class="rms">rms ${m.rms.toFixed(2)}%</span>` : ""}
+    </div>`).join("");
+}
+
+function updateStats(info) {
+  document.getElementById("s-jobid").textContent =
+    info.version_id || info.job_id || "—";
+  const ts = info.trained_at || info.started_at;
+  document.getElementById("s-started").textContent = ts
+    ? new Date(ts).toLocaleString("zh-TW", { timeZone: "Asia/Taipei" }) : "—";
+  document.getElementById("s-pairs").textContent =
+    info.training_pairs ?? info.total_pairs ?? "—";
+
+  if (metrics.length > 0) {
+    const best = Math.min(...metrics.map(m => m.bcer));
+    document.getElementById("s-best-bcer").textContent = best.toFixed(3) + "%";
+  } else if (info.best_loss != null) {
+    document.getElementById("s-best-bcer").textContent = info.best_loss.toFixed(3) + "%";
+  }
+}
+
+function updateStatusBadge(status, message, displayName) {
+  const badge = document.getElementById("status-badge");
+  badge.className = "";
+  if (isHistoryMode) {
+    badge.classList.add("st-history");
+    badge.textContent = "📂 歷史記錄";
+  } else {
+    badge.classList.add("st-" + (status || "idle"));
+    const labels = { idle: "idle", running: "⏳ 訓練中", done: "✅ 完成", error: "❌ 失敗" };
+    badge.textContent = labels[status] || status || "idle";
+  }
+  document.getElementById("header-msg").textContent = message || "";
+  if (displayName) {
+    document.getElementById("version-name").textContent = "— " + displayName;
+  }
+}
+
+function clearLogDisplay() {
+  document.getElementById("log").innerHTML = "";
+  renderedLines = 0;
+}
+
+// ── 歷史模式：載入一次即可 ────────────────────────────────────
+async function loadHistoryVersion() {
+  document.getElementById("mode-hint").textContent = "歷史模式：顯示已完成的訓練記錄";
+  try {
+    const res = await fetch(apiBase() + `/api/ocr/model_versions/${VERSION_ID}/log`);
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    const data = await res.json();
+
+    updateStatusBadge("done", data.is_active ? "目前啟用版本" : "", data.display_name);
+    updateStats(data);
+
+    const lines = data.log || [];
+    rebuildMetrics(lines);
+    renderNewLogLines(lines);
+    updateChart();
+    updateMetricList();
+
+    if (lines.length === 0) {
+      document.getElementById("log").innerHTML =
+        '<span style="color:#45475a; font-style:italic;">此版本無訓練 Log 記錄（可能為舊版本）</span>';
+    }
+  } catch (e) {
+    document.getElementById("header-msg").textContent = "載入失敗：" + e.message;
+    updateStatusBadge("error", e.message);
+  }
+}
+
+// ── 即時模式：持續 poll ───────────────────────────────────────
+let lastLogLength = 0;
+
+async function pollCurrentJob() {
+  try {
+    const res = await fetch(apiBase() + "/api/training/job");
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    const job = await res.json();
+
+    updateStatusBadge(job.status, job.message);
+    updateStats(job);
+
+    const lines = job.log || [];
+    if (lines.length !== lastLogLength) {
+      rebuildMetrics(lines);
+      renderNewLogLines(lines);
+      updateChart();
+      updateMetricList();
+      lastLogLength = lines.length;
+    }
+
+    // 更新 poll 指示
+    const ind = document.getElementById("poll-indicator");
+    ind.innerHTML = `<span class="blink">●</span> ${new Date().toLocaleTimeString("zh-TW")}`;
+
+  } catch (e) {
+    document.getElementById("header-msg").textContent = "連線失敗：" + e.message;
+  }
+}
+
+// ── 啟動 ─────────────────────────────────────────────────────
+if (isHistoryMode) {
+  loadHistoryVersion();
+} else {
+  document.getElementById("mode-hint").textContent = "即時模式：每 2 秒自動更新";
+  pollCurrentJob();
+  setInterval(pollCurrentJob, 2000);
+}
+</script>
+</body>
+</html>

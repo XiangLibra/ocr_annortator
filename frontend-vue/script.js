@@ -986,6 +986,15 @@ createApp({
     const newSchemeName = ref("");
     const fieldExtractResults = ref(null);   // { fileId: { 欄位: 值 } }
     const fieldExtractLoading = ref(false);
+    const fieldConflicts = computed(() => {
+      const results = Object.values(fieldExtractResults.value ?? {});
+      if (results.length <= 1) return new Set();
+      return new Set(
+        (customFields.value || []).filter(field =>
+          new Set(results.map(r => (r.extracted?.[field] ?? "").toString().trim())).size > 1
+        )
+      );
+    });
     // ────────────────────────────────────────────────────────────
 
     const uploadedNames = ref([]);
@@ -1418,13 +1427,6 @@ createApp({
       return null;
     }
 
-    function scrollToPage(fileId, pageIndex) {
-      const el = document.querySelector(`[data-file="${fileId}"][data-page="${pageIndex}"]`);
-      if (el) {
-        el.scrollIntoView({ behavior: "smooth", block: "center" });
-      }
-    }
-
     function scrollOuterToPage(fileId, pageIndex) {
       const el = document.querySelector(`[data-file="${fileId}"][data-page="${pageIndex}"]`);
       if (el) {
@@ -1433,19 +1435,10 @@ createApp({
     }
 
     function handleFieldTableClick(event) {
-      const cell = event.target.closest("td");
+      const cell = event.target.closest("td[data-file-id]");
       if (!cell) return;
-      const row = cell.parentElement;
-      if (!row || row.parentElement?.tagName !== "TBODY") return;
 
-      // 第 0 欄是欄位名稱，從第 1 欄開始對應各檔案
-      const cells = Array.from(row.children);
-      const colIndex = cells.indexOf(cell);
-      if (colIndex < 1) return;
-
-      // fieldExtractResults 的 key 順序對應到欄
-      const fileIds = Object.keys(fieldExtractResults.value || {});
-      const fileId = fileIds[colIndex - 1];
+      const fileId = cell.dataset.fileId;
       if (!fileId) return;
 
       const cellText = (cell.innerText || "").trim();
@@ -1690,26 +1683,6 @@ createApp({
       }
     }
 
-    async function extractFieldsForCompare() {
-      if (compareSelected.value.length === 0) return alert("請先選擇要擷取的檔案");
-      if (customFields.value.length === 0) return alert("請先設定欄位");
-      fieldExtractLoading.value = true;
-      fieldExtractResults.value = null;
-      try {
-        const results = {};
-        await Promise.all(compareSelected.value.map(async (fileId) => {
-          const res = await axios.post(apiBase.value + "/api/extract", {
-            fileId, fields: customFields.value,
-          });
-          results[fileId] = { filename: res.data.filename, extracted: res.data.extracted };
-        }));
-        fieldExtractResults.value = results;
-      } catch (e) {
-        alert("擷取失敗：" + (e.response?.data?.detail || e.message));
-      } finally {
-        fieldExtractLoading.value = false;
-      }
-    }
     // ────────────────────────────────────────────────────────────
 
     async function fetchAvailableModels() {
@@ -1875,7 +1848,7 @@ createApp({
       if (compareSelected.value.length < 2) return alert("請至少選兩個 OCR 檔案");
       await ensureCustomAgent();
       compareLoading.value = true;
-      fieldExtractLoading.value = customFields.value.length > 0;
+      fieldExtractLoading.value = true;
       fieldExtractResults.value = null;
       compareHighlights.value = {};
       try {
@@ -2235,6 +2208,9 @@ createApp({
       fetchModelVersions();
       fetchFieldSchemes();
     });
+    onUnmounted(() => {
+      if (_trainingPoller) { clearInterval(_trainingPoller); _trainingPoller = null; }
+    });
     fetchAgents();
 
     return {
@@ -2324,13 +2300,13 @@ createApp({
       newSchemeName,
       fieldExtractResults,
       fieldExtractLoading,
+      fieldConflicts,
       addCustomField,
       removeCustomField,
       fetchFieldSchemes,
       saveFieldScheme,
       loadFieldScheme,
       deleteFieldScheme,
-      extractFieldsForCompare,
       handleDownload,
       updateDiff,
       compareFiles,

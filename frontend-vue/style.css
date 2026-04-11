@@ -375,3 +375,7 @@ textarea {
   color: #244;
   font-size: 12px;
 }
+
+.field-extract-cell:hover {
+  background: #eef5ff !important;
+}

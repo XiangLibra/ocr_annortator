@@ -3,8 +3,11 @@ from __future__ import annotations
 import base64
 import json
 import os
+import subprocess
 import sys
+import threading
 import uuid
+from collections import deque
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
@@ -42,6 +45,10 @@ field_schemes_col = mongo_client[MONGO_DB]["ocr_field_schemes"]
 
 TRAINING_THRESHOLD = 20   # 累積幾筆後建議重訓（測試用低門檻，正式可改100）
 CUSTOM_MODEL_DIR = OUTPUT_DIR   # 自訓練模型存放目錄
+
+
+def _sanitize_fields(fields: list) -> list:
+    return [str(f).strip() for f in fields if str(f).strip()]
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -358,6 +365,10 @@ if os.path.isdir(FRONT_OCR_DIR):
     @app.get("/", include_in_schema=False)
     def index():
         return FileResponse(os.path.join(FRONT_OCR_DIR, "index.html"))
+
+    @app.get("/training", include_in_schema=False)
+    def training_monitor():
+        return FileResponse(os.path.join(FRONT_OCR_DIR, "training_monitor.html"))
 
 
 if os.path.isdir(FRONT_AGENTS_DIR):
@@ -1018,7 +1029,7 @@ def save_field_scheme(body: dict = Body(...)):
     doc = {
         "scheme_id": scheme_id,
         "name": name,
-        "fields": [f.strip() for f in fields if str(f).strip()],
+        "fields": _sanitize_fields(fields),
         "created_at": datetime.utcnow().isoformat(),
     }
     field_schemes_col.insert_one(doc)
@@ -1032,14 +1043,14 @@ def update_field_scheme(scheme_id: str, body: dict = Body(...)):
     """更新欄位方案"""
     name = (body.get("name") or "").strip()
     fields = body.get("fields") or []
-    if not field_schemes_col.find_one({"scheme_id": scheme_id}):
-        raise HTTPException(status_code=404, detail="找不到此方案")
     update = {}
     if name:
         update["name"] = name
     if fields:
-        update["fields"] = [f.strip() for f in fields if str(f).strip()]
-    field_schemes_col.update_one({"scheme_id": scheme_id}, {"$set": update})
+        update["fields"] = _sanitize_fields(fields)
+    result = field_schemes_col.update_one({"scheme_id": scheme_id}, {"$set": update})
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="找不到此方案")
     return {"ok": True}
 
 
@@ -1335,7 +1346,7 @@ _training_job: Dict[str, Any] = {
     "running": False,
     "job_id": None,
     "started_at": None,
-    "log": [],
+    "log": deque(maxlen=1000),
     "status": "idle",   # idle | running | done | error
     "message": "",
 }
@@ -1344,8 +1355,6 @@ _training_job: Dict[str, Any] = {
 @app.post("/api/training/trigger")
 def trigger_training():
     """在背景啟動 Tesseract LSTM fine-tune，立即回傳 job_id"""
-    import subprocess, threading
-
     if _training_job["running"]:
         raise HTTPException(status_code=409, detail="訓練正在進行中，請稍候")
 
@@ -1361,7 +1370,7 @@ def trigger_training():
         "running": True,
         "job_id": job_id,
         "started_at": datetime.utcnow().isoformat(),
-        "log": [],
+        "log": deque(maxlen=1000),
         "status": "running",
         "message": "訓練啟動中…",
     })
@@ -1381,15 +1390,19 @@ def trigger_training():
                 cwd=APP_DIR,
             )
             for line in proc.stdout:
-                line = line.rstrip()
-                _training_job["log"].append(line)
-                # 只保留最新 200 行，避免記憶體無限成長
-                if len(_training_job["log"]) > 200:
-                    _training_job["log"] = _training_job["log"][-200:]
+                _training_job["log"].append(line.rstrip())
             proc.wait()
             if proc.returncode == 0:
                 _training_job["status"] = "done"
                 _training_job["message"] = "訓練完成！新模型已就緒。"
+                # 把完整 log 儲存到剛建立的版本 document（is_active=True 就是最新的）
+                try:
+                    model_versions_col.update_one(
+                        {"is_active": True},
+                        {"$set": {"training_log": list(_training_job["log"])}},
+                    )
+                except Exception:
+                    pass
             else:
                 _training_job["status"] = "error"
                 _training_job["message"] = f"訓練失敗（exit code {proc.returncode}）"
@@ -1413,5 +1426,23 @@ def training_job_status():
         "started_at": _training_job["started_at"],
         "status": _training_job["status"],
         "message": _training_job["message"],
-        "log": _training_job["log"],
+        "log": list(_training_job["log"]),
+    }
+
+
+@app.get("/api/ocr/model_versions/{version_id}/log")
+def get_version_log(version_id: str):
+    """取得指定版本的訓練 log 與 metadata"""
+    doc = model_versions_col.find_one({"version_id": version_id}, {"_id": 0})
+    if not doc:
+        raise HTTPException(status_code=404, detail="找不到此版本")
+    return {
+        "version_id": doc["version_id"],
+        "display_name": doc.get("display_name", version_id),
+        "trained_at": doc.get("trained_at"),
+        "training_pairs": doc.get("training_pairs"),
+        "best_loss": doc.get("best_loss"),
+        "max_iterations": doc.get("max_iterations"),
+        "is_active": doc.get("is_active", False),
+        "log": doc.get("training_log", []),
     }
