@@ -42,9 +42,10 @@
           </div>
           <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
             <input ref="fileInput" type="file" multiple accept=".pdf,.png,.jpg,.jpeg" />
-            <select v-model="language">
-              <option>繁體中文</option>
-              <option>English</option>
+            <select v-model="language" style="min-width:180px;">
+              <option v-for="m in availableModels" :key="m.value" :value="m.value">
+                {{ m.label }}{{ m.source === 'custom' ? ' ✦' : '' }}
+              </option>
             </select>
             <button type="submit" :disabled="loading">上傳辨識</button>
             <span v-if="loading">上傳 / OCR 中…</span>
@@ -64,8 +65,61 @@
               @edited="updateDiff(fr)" />
           </div>
 
-          <div style="margin-top: 10px;">
-            <label>整體文字（可選，直接手動修正）</label>
+          <!-- AI 自動糾錯區塊 -->
+          <div style="margin-top:12px; border:1px solid #e3e7ef; border-radius:12px; padding:12px; background:#f8fbff;">
+            <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:10px;">
+              <strong>🤖 AI 自動糾錯</strong>
+              <button @click="runAutoCorrect(fr)" :disabled="autoCorrectLoading[fr.fileId]" style="background:#4a6fa5;">
+                {{ autoCorrectLoading[fr.fileId] ? '分析中…' : '一鍵糾錯' }}
+              </button>
+              <span v-if="autoCorrectResults[fr.fileId]" style="font-size:13px; color:#555;">
+                評分：<strong :style="{ color: autoCorrectResults[fr.fileId].evaluation.score >= 80 ? '#2d8a4e' : '#c0392b' }">
+                  {{ autoCorrectResults[fr.fileId].evaluation.score }} 分
+                </strong>
+                ｜ {{ autoCorrectResults[fr.fileId].evaluation.summary }}
+              </span>
+            </div>
+
+            <!-- 左右對照 -->
+            <div v-if="autoCorrectResults[fr.fileId]" style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
+              <div>
+                <label style="font-size:12px; color:#888;">📄 原始 OCR 結果</label>
+                <textarea
+                  :value="fr.fullText"
+                  readonly
+                  style="background:#f5f5f5; color:#666; height:200px; font-size:13px;"
+                ></textarea>
+              </div>
+              <div>
+                <label style="font-size:12px; color:#2d8a4e;">✏️ AI 建議修正（可繼續手動編輯）</label>
+                <textarea
+                  :value="fr.correctedFullText ?? autoCorrectResults[fr.fileId].corrected_text"
+                  @input="(fr.correctedFullText = $event.target.value, updateDiff(fr))"
+                  style="border-color:#4a6fa5; height:200px; font-size:13px;"
+                ></textarea>
+              </div>
+            </div>
+
+            <!-- 問題清單 -->
+            <div v-if="autoCorrectResults[fr.fileId]?.evaluation?.issues?.length" style="margin-top:8px;">
+              <label style="font-size:12px; color:#888;">發現的問題：</label>
+              <ul style="margin:4px 0 0 16px; font-size:13px; color:#c0392b;">
+                <li v-for="(issue, i) in autoCorrectResults[fr.fileId].evaluation.issues" :key="i">{{ issue }}</li>
+              </ul>
+            </div>
+
+            <!-- 採用建議按鈕 -->
+            <div v-if="autoCorrectResults[fr.fileId]" style="margin-top:8px;">
+              <button @click="acceptSuggestion(fr)" style="background:#2d8a4e; font-size:13px;">
+                ✅ 採用 AI 建議
+              </button>
+              <span style="font-size:12px; color:#888; margin-left:8px;">採用後儲存即自動收集訓練資料</span>
+            </div>
+          </div>
+
+          <!-- 一般文字編輯（沒有糾錯結果時顯示） -->
+          <div v-if="!autoCorrectResults[fr.fileId]" style="margin-top:10px;">
+            <label>整體文字（可直接手動修正）</label>
             <textarea
               :value="fr.correctedFullText ?? fr.fullText"
               :placeholder="fr.fullText"
@@ -74,7 +128,7 @@
           </div>
 
           <div class="actions">
-            <button @click="handleSave(fr)">💾 儲存修正</button>
+            <button @click="handleSaveWithTraining(fr)">💾 儲存修正</button>
             <button v-if="exportReady[fr.fileId]" @click="handleDownload(fr)">⬇️ 下載匯出 (ZIP)</button>
           </div>
 
@@ -356,6 +410,86 @@
         </div>
       </div>
       <div style="margin-top:6px; color:#667085; font-size:13px;">點選下方列表的「查看」後，內容會顯示在中間區塊。</div>
+    </div>
+
+    <!-- 訓練狀態面板 -->
+    <div class="card" style="margin-top:12px; border-left:4px solid #4a6fa5;">
+      <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
+        <strong>🧠 OCR 訓練資料狀態</strong>
+        <span style="font-size:13px;">已累積 <strong>{{ trainingStatus.total_pairs }}</strong> / {{ trainingStatus.threshold }} 筆</span>
+        <div style="flex:1; min-width:120px; background:#e3e7ef; border-radius:6px; height:10px;">
+          <div :style="{ width: trainingStatus.progress_pct + '%', background: trainingStatus.ready_to_train ? '#2d8a4e' : '#4a6fa5', height:'10px', borderRadius:'6px', transition:'width .3s' }"></div>
+        </div>
+        <button
+          @click="triggerTraining"
+          :disabled="!trainingStatus.ready_to_train"
+          :style="{ background: trainingStatus.ready_to_train ? '#2d8a4e' : '#aaa' }"
+        >
+          {{ trainingStatus.ready_to_train ? '🚀 觸發訓練' : '資料不足' }}
+        </button>
+        <button @click="fetchTrainingStatus" style="background:#667085; font-size:12px; padding:4px 10px;">重新整理</button>
+      </div>
+    </div>
+
+    <!-- 模型版本管理面板 -->
+    <div class="card" style="margin-top:12px; border-left:4px solid #7c5cbf;">
+      <div style="display:flex; align-items:center; gap:10px; margin-bottom:10px; flex-wrap:wrap;">
+        <strong>🗂 OCR 模型版本管理</strong>
+        <span style="font-size:12px; color:#667085;">自訓練模型歷史版本，可隨時切換啟用</span>
+        <button @click="fetchModelVersions" style="background:#667085; font-size:12px; padding:4px 10px; margin-left:auto;">重新整理</button>
+      </div>
+      <div v-if="modelVersionsLoading" style="color:#888; font-size:13px;">載入中…</div>
+      <div v-else-if="modelVersions.length === 0" style="color:#aaa; font-size:13px;">尚無自訓練版本記錄</div>
+      <div v-else style="overflow-x:auto;">
+        <table style="width:100%; border-collapse:collapse; font-size:13px;">
+          <thead>
+            <tr style="background:#f0f2f8; text-align:left;">
+              <th style="padding:6px 10px; border-bottom:1px solid #dde3f0;">版本 ID</th>
+              <th style="padding:6px 10px; border-bottom:1px solid #dde3f0;">訓練時間</th>
+              <th style="padding:6px 10px; border-bottom:1px solid #dde3f0;">訓練筆數</th>
+              <th style="padding:6px 10px; border-bottom:1px solid #dde3f0;">最佳 Loss</th>
+              <th style="padding:6px 10px; border-bottom:1px solid #dde3f0;">迭代</th>
+              <th style="padding:6px 10px; border-bottom:1px solid #dde3f0;">狀態</th>
+              <th style="padding:6px 10px; border-bottom:1px solid #dde3f0;">操作</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="v in modelVersions" :key="v.version_id"
+                :style="{ background: v.is_active ? '#f0fff4' : 'white' }">
+              <td style="padding:6px 10px; border-bottom:1px solid #f0f2f8; font-family:monospace;">
+                {{ v.version_id }}
+              </td>
+              <td style="padding:6px 10px; border-bottom:1px solid #f0f2f8;">
+                {{ v.trained_at ? v.trained_at.slice(0,16).replace('T',' ') : '-' }}
+              </td>
+              <td style="padding:6px 10px; border-bottom:1px solid #f0f2f8; text-align:center;">
+                {{ v.training_pairs ?? '-' }}
+              </td>
+              <td style="padding:6px 10px; border-bottom:1px solid #f0f2f8; text-align:center;">
+                {{ v.best_loss != null ? v.best_loss.toFixed(2) + '%' : '-' }}
+              </td>
+              <td style="padding:6px 10px; border-bottom:1px solid #f0f2f8; text-align:center;">
+                {{ v.max_iterations ?? '-' }}
+              </td>
+              <td style="padding:6px 10px; border-bottom:1px solid #f0f2f8;">
+                <span v-if="v.is_active"
+                      style="background:#2d8a4e; color:white; border-radius:10px; padding:2px 10px; font-size:11px;">
+                  啟用中
+                </span>
+                <span v-else style="color:#aaa; font-size:12px;">未啟用</span>
+              </td>
+              <td style="padding:6px 10px; border-bottom:1px solid #f0f2f8;">
+                <button v-if="!v.is_active"
+                        @click="activateModelVersion(v.version_id)"
+                        style="background:#7c5cbf; font-size:12px; padding:3px 10px;">
+                  切換啟用
+                </button>
+                <span v-else style="color:#2d8a4e; font-size:12px;">—</span>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
     </div>
 
     <transition name="fade-slide">

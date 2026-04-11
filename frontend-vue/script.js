@@ -933,12 +933,21 @@ createApp({
     console.log("API base URL set to:", apiBase.value);
     
     //  const apiBase = ref("https://ocrmatch.vghtced.com.tw"); 
-    const language = ref("繁體中文");
+    const language = ref("chi_tra");
+    const availableModels = ref([
+      { label: "繁體中文 (系統預設)", value: "chi_tra", source: "system" },
+      { label: "English (系統預設)", value: "eng", source: "system" },
+    ]);
+    const modelVersions = ref([]);
+    const modelVersionsLoading = ref(false);
     const loading = ref(false);
     const items = ref([]);
     const baselines = ref({});
     const diffs = ref({});
     const exportReady = ref({});
+    const autoCorrectLoading = ref({});
+    const autoCorrectResults = ref({});
+    const trainingStatus = ref({ total_pairs: 0, threshold: 20, ready_to_train: false, progress_pct: 0 });
     const fileInput = ref(null);
     const currentBatchId = ref("");
     const agents = ref([]);
@@ -1529,6 +1538,110 @@ createApp({
       }
     }
 
+    async function handleSaveWithTraining(fr) {
+      // 用 buildBeforeForDiff / buildAfterForDiff 涵蓋兩種修正方式：
+      // 1. 全文區手動輸入（correctedFullText）
+      // 2. 畫布上逐字修改（_edited word）
+      const originalText = buildBeforeForDiff(fr);
+      const correctedText = buildAfterForDiff(fr);
+      await handleSave(fr);
+      // 只要修正前後有差異就收集訓練資料
+      if (correctedText && correctedText.trim() !== originalText.trim()) {
+        try {
+          const res = await axios.post(apiBase.value + "/api/training/add", {
+            fileId: fr.fileId,
+            original_text: originalText,
+            corrected_text: correctedText,
+            source: "manual",
+          });
+          if (res.data?.ok) {
+            trainingStatus.value.total_pairs = res.data.total_pairs;
+            trainingStatus.value.ready_to_train = res.data.ready_to_train;
+            trainingStatus.value.progress_pct = Math.min(100, Math.round(res.data.total_pairs / trainingStatus.value.threshold * 100));
+            if (res.data.ready_to_train) {
+              alert(`🎉 已累積 ${res.data.total_pairs} 筆訓練資料，達到門檻！可以點「觸發訓練」了。`);
+            }
+          }
+        } catch (e) {
+          console.warn("訓練資料收集失敗", e);
+        }
+      }
+    }
+
+    async function runAutoCorrect(fr) {
+      autoCorrectLoading.value = { ...autoCorrectLoading.value, [fr.fileId]: true };
+      try {
+        const res = await axios.post(apiBase.value + "/api/auto_correct", {
+          fileId: fr.fileId,
+          model: "llama3.2:3b",
+        });
+        autoCorrectResults.value = { ...autoCorrectResults.value, [fr.fileId]: res.data };
+      } catch (e) {
+        alert("AI 糾錯失敗：" + (e.response?.data?.detail || e.message));
+      } finally {
+        autoCorrectLoading.value = { ...autoCorrectLoading.value, [fr.fileId]: false };
+      }
+    }
+
+    function acceptSuggestion(fr) {
+      const result = autoCorrectResults.value[fr.fileId];
+      if (!result) return;
+      fr.correctedFullText = result.corrected_text;
+      updateDiff(fr);
+    }
+
+    async function fetchTrainingStatus() {
+      try {
+        const res = await axios.get(apiBase.value + "/api/training/status");
+        trainingStatus.value = res.data;
+      } catch (e) {
+        console.warn("無法取得訓練狀態", e);
+      }
+    }
+
+    async function fetchAvailableModels() {
+      try {
+        const res = await axios.get(apiBase.value + "/api/ocr/models");
+        availableModels.value = res.data.models || [];
+      } catch (e) {
+        console.warn("無法取得模型清單", e);
+      }
+    }
+
+    async function fetchModelVersions() {
+      modelVersionsLoading.value = true;
+      try {
+        const res = await axios.get(apiBase.value + "/api/ocr/model_versions");
+        modelVersions.value = res.data.versions || [];
+      } catch (e) {
+        console.warn("無法取得版本清單", e);
+      } finally {
+        modelVersionsLoading.value = false;
+      }
+    }
+
+    async function activateModelVersion(versionId) {
+      if (!confirm(`確定要切換到版本 ${versionId}？\nchi_tra_custom 將會更換為此版本。`)) return;
+      try {
+        const res = await axios.post(apiBase.value + "/api/ocr/model_versions/activate", { version_id: versionId });
+        alert(`✅ ${res.data.message}`);
+        await fetchModelVersions();
+        await fetchAvailableModels();
+      } catch (e) {
+        alert("切換失敗：" + (e.response?.data?.detail || e.message));
+      }
+    }
+
+    async function triggerTraining() {
+      if (!confirm("確定要觸發 Tesseract 模型訓練？")) return;
+      try {
+        const res = await axios.post(apiBase.value + "/api/training/trigger");
+        alert(`✅ ${res.data.msg}`);
+      } catch (e) {
+        alert("訓練失敗：" + (e.response?.data?.detail || e.message));
+      }
+    }
+
     async function handleDownload(fr) {
       await downloadZip(fr);
     }
@@ -1957,6 +2070,9 @@ createApp({
       loadLocalSavedDags();
       renderMermaid();
       loadDag();
+      fetchTrainingStatus();
+      fetchAvailableModels();
+      fetchModelVersions();
     });
     fetchAgents();
 
@@ -2026,6 +2142,19 @@ createApp({
       handleUpload,
       handleDrop,
       handleSave,
+      handleSaveWithTraining,
+      runAutoCorrect,
+      acceptSuggestion,
+      autoCorrectLoading,
+      autoCorrectResults,
+      trainingStatus,
+      fetchTrainingStatus,
+      triggerTraining,
+      availableModels,
+      modelVersions,
+      modelVersionsLoading,
+      fetchModelVersions,
+      activateModelVersion,
       handleDownload,
       updateDiff,
       compareFiles,

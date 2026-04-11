@@ -9,7 +9,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 import ollama
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import Body, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -27,7 +27,7 @@ OUTPUT_DIR = os.path.join(APP_DIR, "output")
 OCR_IMAGE_DIR = os.path.join(OUTPUT_DIR, "ocr_images")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 os.makedirs(OCR_IMAGE_DIR, exist_ok=True)
-LANG_MAP = {"繁體中文": "chi_tra", "English": "eng"}
+LANG_MAP = {"繁體中文": "chi_tra", "English": "eng", "繁體中文(自訓練)": "chi_tra_custom"}
 STORE: Dict[str, Any] = {}
 MONGO_URL = os.getenv("MONGO_URL", "mongodb://localhost:27017")
 MONGO_DB = os.getenv("MONGO_DB", "ocr_insight")
@@ -36,6 +36,11 @@ MONGO_BATCH_COL = os.getenv("MONGO_BATCH_COL", "ocr_batches")
 mongo_client = MongoClient(MONGO_URL)
 ocr_collection = mongo_client[MONGO_DB][MONGO_COL]
 ocr_batch_collection = mongo_client[MONGO_DB][MONGO_BATCH_COL]
+training_collection = mongo_client[MONGO_DB]["ocr_training_pairs"]
+model_versions_col = mongo_client[MONGO_DB]["ocr_model_versions"]
+
+TRAINING_THRESHOLD = 20   # 累積幾筆後建議重訓（測試用低門檻，正式可改100）
+CUSTOM_MODEL_DIR = OUTPUT_DIR   # 自訓練模型存放目錄
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -763,7 +768,8 @@ async def ocr(files: List[UploadFile] = File(...), language: str = Form("繁體�
     """
     上傳多檔進行 OCR，回傳 pages/words 結構（供前端標註器使用）
     """
-    lang_code = LANG_MAP.get(language, "chi_tra")
+    # LANG_MAP 查找（向下相容舊文字 key）；若找不到則直接視為 lang_code
+    lang_code = LANG_MAP.get(language, language) or "chi_tra"
     results = []
     batch_id = str(uuid.uuid4())
     created_at = datetime.utcnow()
@@ -895,3 +901,395 @@ async def save(
     STORE[fileId] = record
 
     return {"ok": True, "path": out_path}
+
+
+# ═══════════════════════════════════════════════════════════════
+#                  結構化欄位擷取 & Google Sheets 匯出
+# ═══════════════════════════════════════════════════════════════
+
+EXTRACT_FIELDS = ["公司名稱", "地址", "統一編號", "聯絡人", "電話", "傳真", "稅務"]
+
+EXTRACT_SYSTEM_PROMPT = """你是一個專業的文件資料擷取助理。
+請從以下 OCR 文字中擷取指定欄位，並以 JSON 格式回傳。
+若某欄位找不到，值設為 null。
+只回傳 JSON，不要加任何說明文字。
+
+欄位定義：
+- 公司名稱：公司或行號的正式名稱
+- 地址：公司地址（中文或英文皆可）
+- 統一編號：8 位數字的統一編號（台灣）
+- 聯絡人：負責人或聯絡人姓名
+- 電話：聯絡電話（含區碼）
+- 傳真：傳真號碼（含區碼）
+- 稅務：稅率、稅額或稅務相關資訊
+
+回傳格式範例：
+{
+  "公司名稱": "成功有限公司",
+  "地址": "台中市西區環中路一段100-3號",
+  "統一編號": "12345678",
+  "聯絡人": "林小姐",
+  "電話": "04-27070598",
+  "傳真": "04-27070568",
+  "稅務": null
+}"""
+
+
+class ExtractRequest(BaseModel):
+    fileId: str
+    fields: Optional[List[str]] = None
+    model: str = "llama3.2:3b"
+
+
+class ExportGSheetRequest(BaseModel):
+    fileId: str
+    extracted: Dict[str, Any]
+    spreadsheet_id: str
+    sheet_name: str = "Sheet1"
+    start_row: Optional[int] = None  # None = 自動追加
+
+
+@app.post("/api/extract")
+def extract_fields(req: ExtractRequest):
+    """從 OCR 結果中結構化擷取指定欄位"""
+    record = STORE.get(req.fileId)
+    if not record:
+        doc = ocr_collection.find_one({"_id": req.fileId})
+        record = doc_to_item(doc) if doc else None
+    if not record:
+        raise HTTPException(status_code=404, detail=f"fileId {req.fileId} not found")
+
+    text = record.get("correctedFullText") or record.get("fullText") or ""
+    if not text.strip():
+        raise HTTPException(status_code=400, detail="OCR 文字為空，無法擷取")
+
+    fields = req.fields or EXTRACT_FIELDS
+    fields_str = "、".join(fields)
+    user_prompt = f"請擷取以下欄位：{fields_str}\n\nOCR 文字：\n{text}"
+
+    raw = llm_processor.process_with_llm(
+        model=req.model,
+        system_prompt=EXTRACT_SYSTEM_PROMPT,
+        user_prompt=user_prompt,
+        temperature=0.0,
+    )
+
+    # 嘗試從回應中解析 JSON
+    try:
+        # 找到第一個 { 到最後一個 } 之間的內容
+        start = raw.find("{")
+        end = raw.rfind("}") + 1
+        if start == -1 or end == 0:
+            raise ValueError("找不到 JSON 內容")
+        extracted = json.loads(raw[start:end])
+    except (json.JSONDecodeError, ValueError) as e:
+        raise HTTPException(status_code=500, detail=f"LLM 回傳格式錯誤: {str(e)}\n原始回應: {raw}")
+
+    return {
+        "fileId": req.fileId,
+        "filename": record.get("filename", ""),
+        "extracted": extracted,
+    }
+
+
+@app.post("/api/export/gsheet")
+def export_to_gsheet(req: ExportGSheetRequest):
+    """將擷取結果寫入 Google Sheets（使用 OAuth token）"""
+    token_path = os.path.join(APP_DIR, "token.json")
+    if not os.path.exists(token_path):
+        raise HTTPException(
+            status_code=503,
+            detail="尚未完成 Google OAuth 授權，請先執行 setup_gsheet_auth.py"
+        )
+
+    try:
+        import gspread
+        from google.oauth2.credentials import Credentials
+        from google.auth.transport.requests import Request
+
+        with open(token_path) as f:
+            token_data = json.load(f)
+
+        creds = Credentials(
+            token=token_data["token"],
+            refresh_token=token_data["refresh_token"],
+            token_uri=token_data["token_uri"],
+            client_id=token_data["client_id"],
+            client_secret=token_data["client_secret"],
+            scopes=token_data["scopes"],
+        )
+
+        # token 過期時自動刷新
+        if creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+            token_data["token"] = creds.token
+            with open(token_path, "w") as f:
+                json.dump(token_data, f, indent=2)
+
+        gc = gspread.authorize(creds)
+        sh = gc.open_by_key(req.spreadsheet_id)
+        ws = sh.worksheet(req.sheet_name)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Google Sheets 連線失敗: {str(e)}")
+
+    # 取得標頭列（第一列）
+    headers = ws.row_values(1)
+
+    # 若標頭為空，自動寫入欄位名稱
+    if not any(headers):
+        field_names = list(req.extracted.keys())
+        ws.update("A1", [field_names])
+        headers = field_names
+
+    # 組合一筆資料列，按標頭順序排列
+    row_data = [str(req.extracted.get(h, "")) for h in headers]
+
+    if req.start_row:
+        target_row = req.start_row
+        ws.update(f"A{target_row}", [row_data])
+    else:
+        ws.append_row(row_data, value_input_option="USER_ENTERED")
+
+    return {
+        "ok": True,
+        "spreadsheet_id": req.spreadsheet_id,
+        "sheet_name": req.sheet_name,
+        "fields_written": headers,
+        "data": row_data,
+    }
+
+
+# ═══════════════════════════════════════════════════════════════
+#              Phase 1：自動評估 + 糾正 + 訓練資料收集
+# ═══════════════════════════════════════════════════════════════
+
+EVALUATOR_PROMPT = """你是 OCR 品質評估專家。請評估以下 OCR 辨識結果的品質。
+評分標準（0-100 分）：
+- 完整性：文字是否完整，沒有大量缺漏（40分）
+- 正確性：字詞是否正確，沒有明顯錯字（40分）
+- 格式：標點、段落是否合理（20分）
+
+請回傳 JSON 格式：
+{
+  "score": 85,
+  "completeness": 40,
+  "accuracy": 35,
+  "format": 10,
+  "issues": ["斷字錯誤：'公 司' 應為 '公司'", "缺漏電話號碼後段"],
+  "summary": "整體品質良好，有少量斷字問題"
+}
+只回傳 JSON，不要加說明文字。"""
+
+CORRECTOR_PROMPT = """你是 OCR 文字修正專家，專門處理繁體中文文件。
+請根據提供的錯誤分析，修正 OCR 辨識結果中的問題：
+1. 合併不當斷字（如「公 司」→「公司」）
+2. 修正明顯錯字
+3. 補全合理推斷缺漏的內容
+4. 保持原始文件的排版結構
+
+直接回傳修正後的完整文字，不要加任何說明或標記。"""
+
+
+class AutoCorrectRequest(BaseModel):
+    fileId: str
+    model: str = "llama3.2:3b"
+
+
+class TrainingAddRequest(BaseModel):
+    fileId: str
+    original_text: str
+    corrected_text: str
+    source: str = "manual"   # manual | auto
+
+
+@app.post("/api/auto_correct")
+def auto_correct(req: AutoCorrectRequest):
+    """自動評估 OCR 品質並產生糾正建議"""
+    record = STORE.get(req.fileId)
+    if not record:
+        doc = ocr_collection.find_one({"_id": req.fileId})
+        record = doc_to_item(doc) if doc else None
+    if not record:
+        raise HTTPException(status_code=404, detail=f"fileId {req.fileId} not found")
+
+    original_text = record.get("fullText") or ""
+    if not original_text.strip():
+        raise HTTPException(status_code=400, detail="OCR 文字為空")
+
+    # Step 1: Evaluator — 評分
+    eval_raw = llm_processor.process_with_llm(
+        model=req.model,
+        system_prompt=EVALUATOR_PROMPT,
+        user_prompt=f"請評估以下 OCR 文字品質：\n\n{original_text}",
+        temperature=0.0,
+    )
+    try:
+        start = eval_raw.find("{")
+        end = eval_raw.rfind("}") + 1
+        evaluation = json.loads(eval_raw[start:end])
+    except Exception:
+        evaluation = {"score": 0, "issues": [], "summary": eval_raw}
+
+    # Step 2: Corrector — 根據評分結果修正
+    issues_str = "\n".join(f"- {i}" for i in evaluation.get("issues", []))
+    corrector_input = (
+        f"發現的問題：\n{issues_str}\n\n"
+        f"原始 OCR 文字：\n{original_text}"
+    )
+    corrected_text = llm_processor.process_with_llm(
+        model=req.model,
+        system_prompt=CORRECTOR_PROMPT,
+        user_prompt=corrector_input,
+        temperature=0.0,
+    )
+
+    return {
+        "fileId": req.fileId,
+        "filename": record.get("filename", ""),
+        "original_text": original_text,
+        "corrected_text": corrected_text.strip(),
+        "evaluation": evaluation,
+    }
+
+
+@app.post("/api/training/add")
+def add_training_pair(req: TrainingAddRequest):
+    """將一組 原始→修正 存為訓練資料"""
+    if not req.corrected_text.strip() or req.original_text == req.corrected_text:
+        return {"ok": False, "msg": "修正前後相同，略過"}
+
+    pair = {
+        "_id": str(uuid.uuid4()),
+        "fileId": req.fileId,
+        "original_text": req.original_text,
+        "corrected_text": req.corrected_text,
+        "source": req.source,
+        "createdAt": datetime.utcnow(),
+    }
+    training_collection.insert_one(pair)
+    count = training_collection.count_documents({})
+    return {
+        "ok": True,
+        "total_pairs": count,
+        "ready_to_train": count >= TRAINING_THRESHOLD,
+    }
+
+
+@app.get("/api/ocr/models")
+def list_ocr_models():
+    """
+    回傳可用模型清單（系統內建 + 自訓練版本）。
+    自訓練模型加入版本 metadata（訓練時間、筆數、loss）。
+    """
+    import glob as _glob
+
+    built_in = [
+        {"label": "繁體中文 (系統預設)", "value": "chi_tra", "lang_code": "chi_tra", "source": "system"},
+        {"label": "English (系統預設)", "value": "eng", "lang_code": "eng", "source": "system"},
+    ]
+
+    # 取得每個版本的 metadata（若有）
+    meta_map = {}
+    for doc in model_versions_col.find({}, {"_id": 0}):
+        meta_map[doc.get("lang_code", "")] = doc
+
+    custom_models = []
+    skip_list = {"chi_tra_vert"}
+    for td_path in sorted(_glob.glob(os.path.join(OUTPUT_DIR, "*.traineddata"))):
+        lang_code = os.path.splitext(os.path.basename(td_path))[0]
+        if lang_code in skip_list:
+            continue
+        meta = meta_map.get(lang_code, {})
+        label = meta.get("display_name") or (
+            "繁體中文 (自訓練最新版)" if lang_code == "chi_tra_custom" else lang_code
+        )
+        custom_models.append({
+            "label": label,
+            "value": lang_code,
+            "lang_code": lang_code,
+            "source": "custom",
+            "file": os.path.basename(td_path),
+            "size_mb": round(os.path.getsize(td_path) / 1024 / 1024, 1),
+            "trained_at": meta.get("trained_at"),
+            "training_pairs": meta.get("training_pairs"),
+            "best_loss": meta.get("best_loss"),
+            "max_iterations": meta.get("max_iterations"),
+            "is_active": meta.get("is_active", False),
+        })
+
+    return {"models": built_in + custom_models}
+
+
+@app.get("/api/ocr/model_versions")
+def list_model_versions():
+    """回傳所有自訓練版本紀錄（依訓練時間倒序）"""
+    docs = list(model_versions_col.find({}, {"_id": 0}).sort("trained_at", -1))
+    return {"versions": docs}
+
+
+@app.post("/api/ocr/model_versions/activate")
+def activate_model_version(body: dict = Body(...)):
+    """
+    啟用指定版本（version_id），將對應的 .traineddata 複製為 chi_tra_custom.traineddata。
+    同時更新 MongoDB 中的 is_active 標記。
+    """
+    import shutil as _shutil
+    version_id = body.get("version_id")
+    if not version_id:
+        raise HTTPException(status_code=400, detail="缺少 version_id")
+
+    doc = model_versions_col.find_one({"version_id": version_id}, {"_id": 0})
+    if not doc:
+        raise HTTPException(status_code=404, detail="找不到此版本")
+
+    src = os.path.join(OUTPUT_DIR, doc["file"])
+    if not os.path.exists(src):
+        raise HTTPException(status_code=404, detail=f"模型檔案不存在: {doc['file']}")
+
+    dst = os.path.join(OUTPUT_DIR, "chi_tra_custom.traineddata")
+    if os.path.abspath(src) != os.path.abspath(dst):
+        _shutil.copy2(src, dst)
+
+    # 清除舊的 is_active，設定新的
+    model_versions_col.update_many({}, {"$set": {"is_active": False}})
+    model_versions_col.update_one({"version_id": version_id}, {"$set": {"is_active": True}})
+
+    return {"ok": True, "activated": version_id, "message": f"已啟用 {doc.get('display_name', version_id)}"}
+
+
+@app.get("/api/training/status")
+def training_status():
+    """查詢訓練資料累積狀況"""
+    count = training_collection.count_documents({})
+    return {
+        "total_pairs": count,
+        "threshold": TRAINING_THRESHOLD,
+        "ready_to_train": count >= TRAINING_THRESHOLD,
+        "progress_pct": min(100, int(count / TRAINING_THRESHOLD * 100)),
+    }
+
+
+@app.post("/api/training/trigger")
+def trigger_training():
+    """觸發 Tesseract 重訓（需累積足夠資料）"""
+    import subprocess, tempfile, shutil
+
+    count = training_collection.count_documents({})
+    if count < TRAINING_THRESHOLD:
+        raise HTTPException(
+            status_code=400,
+            detail=f"訓練資料不足，目前 {count} 筆，需要 {TRAINING_THRESHOLD} 筆"
+        )
+
+    # 匯出訓練資料
+    pairs = list(training_collection.find({}, {"_id": 0, "original_text": 1, "corrected_text": 1}))
+    export_path = os.path.join(OUTPUT_DIR, "training_pairs.json")
+    with open(export_path, "w", encoding="utf-8") as f:
+        json.dump(pairs, f, ensure_ascii=False, indent=2)
+
+    return {
+        "ok": True,
+        "total_pairs": count,
+        "export_path": export_path,
+        "msg": f"已匯出 {count} 筆訓練資料到 {export_path}，可用於後續 Tesseract 訓練流程",
+    }

@@ -1,7 +1,12 @@
 # backend/ocr_core.py
-import io, base64, fitz, pytesseract
+import io, base64, os, fitz, pytesseract
 from PIL import Image
 from pytesseract import Output
+
+# 自訂模型的 tessdata 目錄（含 chi_tra_custom.traineddata）
+_APP_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+CUSTOM_TESSDATA = os.path.join(_APP_DIR, "output")
+SYSTEM_TESSDATA = "/usr/share/tesseract-ocr/5/tessdata"
 
 def pil_to_base64(img: Image.Image) -> str:
     buf = io.BytesIO()
@@ -18,7 +23,10 @@ def pdf_to_images(pdf_bytes: bytes):
     return imgs
 
 def image_to_words(img: Image.Image, lang_code: str, conf_min: int = 10):
-    data = pytesseract.image_to_data(img, lang=lang_code, output_type=Output.DICT)
+    # chi_tra_custom 使用自訂 tessdata 目錄
+    tessdata_dir = CUSTOM_TESSDATA if lang_code == "chi_tra_custom" else SYSTEM_TESSDATA
+    config = f"--tessdata-dir {tessdata_dir}"
+    data = pytesseract.image_to_data(img, lang=lang_code, config=config, output_type=Output.DICT)
     n = len(data["text"])
     words = []
     for i in range(n):

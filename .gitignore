@@ -12,6 +12,9 @@ venv/
 *.zip
 
 
+training_workspace/
+client_secrets.json
+token.json
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
