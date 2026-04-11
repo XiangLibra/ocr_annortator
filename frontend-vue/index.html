@@ -144,13 +144,70 @@
         <div style="display:flex; flex-direction:column; gap:12px;">
           <div class="list" style="border:1px solid #e3e7ef; border-radius:10px; padding:10px; background:#fff;">
             <h4 style="margin:0 0 6px;">選擇要比對的 OCR 檔（至少兩個）</h4>
-            <div style="display:flex; flex-direction:column; gap:6px; max-height:220px; overflow:auto;">
+            <div style="display:flex; flex-direction:column; gap:6px; max-height:180px; overflow:auto;">
               <label v-for="fr in items" :key="fr.fileId" style="display:flex; align-items:center; gap:6px;">
                 <input type="checkbox" :value="fr.fileId" v-model="compareSelected">
                 <span>{{ fr.filename }}</span>
               </label>
             </div>
-            <button :disabled="compareLoading" style="margin-top:8px;" @click="compareFiles">🚀 比對文件</button>
+
+            <!-- 自訂欄位擷取 -->
+            <details style="margin-top:10px;" open>
+              <summary style="cursor:pointer; font-weight:600; font-size:13px; color:#4a6fa5; user-select:none;">
+                📋 自訂擷取欄位
+              </summary>
+              <div style="margin-top:8px; border:1px solid #e3e7ef; border-radius:8px; padding:10px; background:#f8fbff;">
+
+                <!-- 方案選擇 -->
+                <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap; margin-bottom:8px;">
+                  <span style="font-size:12px; color:#667085;">載入方案：</span>
+                  <select v-if="fieldSchemes.length" @change="e => { const s = fieldSchemes.find(x => x.scheme_id === e.target.value); if(s) loadFieldScheme(s); e.target.value=''; }"
+                          style="font-size:12px; padding:3px 6px; border-radius:6px; border:1px solid #ccd5e0;">
+                    <option value="">— 選擇方案 —</option>
+                    <option v-for="s in fieldSchemes" :key="s.scheme_id" :value="s.scheme_id">{{ s.name }}</option>
+                  </select>
+                  <span v-else style="font-size:12px; color:#aaa;">尚無已儲存方案</span>
+                  <div style="display:flex; gap:4px; flex-wrap:wrap;">
+                    <button v-for="s in fieldSchemes" :key="s.scheme_id + '_del'"
+                            @click="deleteFieldScheme(s.scheme_id)"
+                            style="background:#e25555; font-size:11px; padding:2px 7px;">
+                      ✕ {{ s.name }}
+                    </button>
+                  </div>
+                </div>
+
+                <!-- 欄位清單 -->
+                <div style="display:flex; flex-wrap:wrap; gap:6px; margin-bottom:8px;">
+                  <span v-for="(f, i) in customFields" :key="i"
+                        style="display:flex; align-items:center; gap:4px; background:#e8effe; border-radius:20px; padding:3px 10px; font-size:13px;">
+                    {{ f }}
+                    <button @click="removeCustomField(i)"
+                            style="background:none; color:#e25555; font-size:13px; padding:0; margin:0; border:none; cursor:pointer; line-height:1;">✕</button>
+                  </span>
+                  <span v-if="customFields.length === 0" style="font-size:12px; color:#aaa;">尚未設定欄位</span>
+                </div>
+
+                <!-- 新增欄位 -->
+                <div style="display:flex; gap:6px; align-items:center; margin-bottom:8px;">
+                  <input v-model="newFieldName" @keyup.enter="addCustomField"
+                         placeholder="輸入欄位名稱…" style="flex:1; font-size:13px; padding:4px 8px; border-radius:6px; border:1px solid #ccd5e0;" />
+                  <button @click="addCustomField" style="font-size:12px; padding:4px 10px;">+ 新增</button>
+                </div>
+
+                <!-- 儲存方案 -->
+                <div style="display:flex; gap:6px; align-items:center; border-top:1px dashed #dde3f0; padding-top:8px;">
+                  <input v-model="newSchemeName" @keyup.enter="saveFieldScheme"
+                         placeholder="方案名稱…" style="flex:1; font-size:13px; padding:4px 8px; border-radius:6px; border:1px solid #ccd5e0;" />
+                  <button @click="saveFieldScheme" style="background:#4a6fa5; font-size:12px; padding:4px 10px;">💾 儲存方案</button>
+                </div>
+
+              </div>
+            </details>
+
+            <button :disabled="compareLoading" style="margin-top:10px;" @click="compareFiles">
+              {{ compareLoading ? '⏳ 比對中…' : '🚀 比對文件' }}
+              <span v-if="customFields.length > 0 && !compareLoading" style="font-size:11px; opacity:.8;">（含擷取 {{ customFields.length }} 個欄位）</span>
+            </button>
             <div v-if="compareResult" style="margin-top:8px; padding:8px; border-radius:10px; border:1px solid #e3e7ef; background:#fafafa;">
               <div><strong>策略：</strong>{{ compareResult.strategy_used }}</div>
               <div v-if="comparePairs.length === 2" style="margin-top:8px;">
@@ -188,6 +245,41 @@
                       </span>
                     </pre>
                   </div>
+                </div>
+              </div>
+
+              <!-- 欄位擷取結果表格（比對完後自動顯示） -->
+              <div v-if="fieldExtractLoading" style="margin-top:10px; color:#667085; font-size:13px;">⏳ 欄位擷取中…</div>
+              <div v-else-if="fieldExtractResults && customFields.length > 0" style="margin-top:12px;">
+                <div class="badge" style="margin-bottom:6px;">📋 欄位擷取結果</div>
+                <div style="overflow-x:auto;">
+                  <table style="width:100%; border-collapse:collapse; font-size:13px;" @click="handleFieldTableClick($event)">
+                    <thead>
+                      <tr style="background:#eef2fb;">
+                        <th style="padding:6px 10px; border:1px solid #dde3f0; text-align:left; white-space:nowrap;">欄位</th>
+                        <th v-for="(info, fid) in fieldExtractResults" :key="fid"
+                            style="padding:6px 10px; border:1px solid #dde3f0; text-align:left;">
+                          {{ info.filename || fid }}
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr v-for="field in customFields" :key="field"
+                          :style="{ background: Object.keys(fieldExtractResults).length > 1 &&
+                            new Set(Object.values(fieldExtractResults).map(r => (r.extracted?.[field] ?? '').toString().trim())).size > 1
+                            ? '#fff0f0' : 'white' }">
+                        <td style="padding:6px 10px; border:1px solid #dde3f0; font-weight:600; white-space:nowrap;">{{ field }}</td>
+                        <td v-for="(info, fid) in fieldExtractResults" :key="fid"
+                            style="padding:6px 10px; border:1px solid #dde3f0; word-break:break-all; cursor:pointer;"
+                            :title="info.extracted?.[field] ? '點擊跳至圖片位置' : ''"
+                            @mouseenter="$event.target.style.background='#eef5ff'"
+                            @mouseleave="$event.target.style.background=''">
+                          {{ info.extracted?.[field] ?? '—' }}
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
+                  <div style="font-size:11px; color:#888; margin-top:4px;">紅底列 = 值不一致｜點擊欄位值可跳至圖片對應位置</div>
                 </div>
               </div>
             </div>
@@ -422,12 +514,35 @@
         </div>
         <button
           @click="triggerTraining"
-          :disabled="!trainingStatus.ready_to_train"
-          :style="{ background: trainingStatus.ready_to_train ? '#2d8a4e' : '#aaa' }"
+          :disabled="!trainingStatus.ready_to_train && !trainingJob.running"
+          :style="{ background: trainingJob.running ? '#d97706' : trainingStatus.ready_to_train ? '#2d8a4e' : '#aaa' }"
         >
-          {{ trainingStatus.ready_to_train ? '🚀 觸發訓練' : '資料不足' }}
+          {{ trainingJob.running ? '⏳ 訓練中…' : trainingStatus.ready_to_train ? '🚀 觸發訓練' : '資料不足' }}
         </button>
         <button @click="fetchTrainingStatus" style="background:#667085; font-size:12px; padding:4px 10px;">重新整理</button>
+      </div>
+
+      <!-- 訓練 Log 面板 -->
+      <div v-if="trainingJob.status !== 'idle'" style="margin-top:10px;">
+        <div style="display:flex; align-items:center; gap:8px; margin-bottom:6px;">
+          <span style="font-size:13px; font-weight:600;">
+            <span v-if="trainingJob.status === 'running'" style="color:#d97706;">⏳ 訓練進行中</span>
+            <span v-else-if="trainingJob.status === 'done'" style="color:#2d8a4e;">✅ 訓練完成</span>
+            <span v-else-if="trainingJob.status === 'error'" style="color:#e25555;">❌ 訓練失敗</span>
+          </span>
+          <span style="font-size:12px; color:#667085;">{{ trainingJob.message }}</span>
+          <button @click="trainingLogOpen = !trainingLogOpen" style="background:#667085; font-size:11px; padding:2px 8px; margin-left:auto;">
+            {{ trainingLogOpen ? '收起 Log' : '展開 Log' }}
+          </button>
+        </div>
+        <div v-if="trainingLogOpen"
+             style="background:#1e1e2e; color:#cdd6f4; font-family:monospace; font-size:12px; border-radius:8px; padding:10px; max-height:280px; overflow-y:auto; line-height:1.6;">
+          <div v-if="trainingJob.log.length === 0" style="color:#6c7086;">等待輸出…</div>
+          <div v-for="(line, i) in trainingJob.log" :key="i"
+               :style="{ color: line.includes('✅') || line.includes('完成') ? '#a6e3a1' : line.includes('STDERR') || line.includes('❌') || line.includes('失敗') ? '#f38ba8' : '#cdd6f4' }">
+            {{ line }}
+          </div>
+        </div>
       </div>
     </div>
 

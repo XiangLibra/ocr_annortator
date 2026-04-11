@@ -940,6 +940,9 @@ createApp({
     ]);
     const modelVersions = ref([]);
     const modelVersionsLoading = ref(false);
+    const trainingJob = ref({ running: false, status: 'idle', message: '', log: [], job_id: null });
+    const trainingLogOpen = ref(false);
+    let _trainingPoller = null;
     const loading = ref(false);
     const items = ref([]);
     const baselines = ref({});
@@ -976,6 +979,15 @@ createApp({
       same: "#1f9d55",
       diff: "#e25555",
     };
+    // ── 自訂欄位 & 方案 ─────────────────────────────────────────
+    const customFields = ref(["公司名稱", "地址", "統一編號", "聯絡人", "電話", "傳真", "稅務"]);
+    const newFieldName = ref("");
+    const fieldSchemes = ref([]);
+    const newSchemeName = ref("");
+    const fieldExtractResults = ref(null);   // { fileId: { 欄位: 值 } }
+    const fieldExtractLoading = ref(false);
+    // ────────────────────────────────────────────────────────────
+
     const uploadedNames = ref([]);
     const dropHint = ref("拖曳檔案到此（最多 2 個 PDF/圖片），或點下方按鈕選擇");
     const chatInput = ref("");
@@ -1420,6 +1432,35 @@ createApp({
       }
     }
 
+    function handleFieldTableClick(event) {
+      const cell = event.target.closest("td");
+      if (!cell) return;
+      const row = cell.parentElement;
+      if (!row || row.parentElement?.tagName !== "TBODY") return;
+
+      // 第 0 欄是欄位名稱，從第 1 欄開始對應各檔案
+      const cells = Array.from(row.children);
+      const colIndex = cells.indexOf(cell);
+      if (colIndex < 1) return;
+
+      // fieldExtractResults 的 key 順序對應到欄
+      const fileIds = Object.keys(fieldExtractResults.value || {});
+      const fileId = fileIds[colIndex - 1];
+      if (!fileId) return;
+
+      const cellText = (cell.innerText || "").trim();
+      if (!cellText || cellText === "—") return;
+
+      const fr = items.value.find(x => x.fileId === fileId);
+      if (!fr) return;
+
+      const match = findWordMatch(fr, cellText);
+      if (!match) return;
+
+      scrollOuterToPage(fileId, match.pageIndex);
+      setTimeout(() => triggerFlash(fileId, match.pageIndex, match.wordId), 120);
+    }
+
     function handleCompareTableClick(event, fileIds) {
       const table = event?.target?.closest?.("table");
       if (!table) return;
@@ -1599,6 +1640,78 @@ createApp({
       }
     }
 
+    // ── 欄位管理 ─────────────────────────────────────────────────
+    function addCustomField() {
+      const f = newFieldName.value.trim();
+      if (!f) return;
+      if (!customFields.value.includes(f)) customFields.value.push(f);
+      newFieldName.value = "";
+    }
+
+    function removeCustomField(idx) {
+      customFields.value.splice(idx, 1);
+    }
+
+    async function fetchFieldSchemes() {
+      try {
+        const res = await axios.get(apiBase.value + "/api/field_schemes");
+        fieldSchemes.value = res.data.schemes || [];
+      } catch (e) {
+        console.warn("無法取得欄位方案", e);
+      }
+    }
+
+    async function saveFieldScheme() {
+      const name = newSchemeName.value.trim();
+      if (!name) return alert("請輸入方案名稱");
+      if (customFields.value.length === 0) return alert("請先新增至少一個欄位");
+      try {
+        await axios.post(apiBase.value + "/api/field_schemes", {
+          name, fields: customFields.value,
+        });
+        newSchemeName.value = "";
+        await fetchFieldSchemes();
+      } catch (e) {
+        alert("儲存失敗：" + (e.response?.data?.detail || e.message));
+      }
+    }
+
+    function loadFieldScheme(scheme) {
+      customFields.value = [...scheme.fields];
+    }
+
+    async function deleteFieldScheme(schemeId) {
+      if (!confirm("確定刪除此方案？")) return;
+      try {
+        await axios.delete(apiBase.value + "/api/field_schemes/" + schemeId);
+        await fetchFieldSchemes();
+      } catch (e) {
+        alert("刪除失敗：" + (e.response?.data?.detail || e.message));
+      }
+    }
+
+    async function extractFieldsForCompare() {
+      if (compareSelected.value.length === 0) return alert("請先選擇要擷取的檔案");
+      if (customFields.value.length === 0) return alert("請先設定欄位");
+      fieldExtractLoading.value = true;
+      fieldExtractResults.value = null;
+      try {
+        const results = {};
+        await Promise.all(compareSelected.value.map(async (fileId) => {
+          const res = await axios.post(apiBase.value + "/api/extract", {
+            fileId, fields: customFields.value,
+          });
+          results[fileId] = { filename: res.data.filename, extracted: res.data.extracted };
+        }));
+        fieldExtractResults.value = results;
+      } catch (e) {
+        alert("擷取失敗：" + (e.response?.data?.detail || e.message));
+      } finally {
+        fieldExtractLoading.value = false;
+      }
+    }
+    // ────────────────────────────────────────────────────────────
+
     async function fetchAvailableModels() {
       try {
         const res = await axios.get(apiBase.value + "/api/ocr/models");
@@ -1633,13 +1746,40 @@ createApp({
     }
 
     async function triggerTraining() {
-      if (!confirm("確定要觸發 Tesseract 模型訓練？")) return;
+      if (trainingJob.value.running) {
+        trainingLogOpen.value = true;
+        return;
+      }
+      if (!confirm("確定要啟動 Tesseract LSTM 訓練？\n訓練時間依資料量而異，可在 log 面板觀察進度。")) return;
       try {
         const res = await axios.post(apiBase.value + "/api/training/trigger");
-        alert(`✅ ${res.data.msg}`);
+        trainingJob.value = { running: true, status: 'running', message: res.data.msg, log: [], job_id: res.data.job_id };
+        trainingLogOpen.value = true;
+        _startTrainingPoller();
       } catch (e) {
         alert("訓練失敗：" + (e.response?.data?.detail || e.message));
       }
+    }
+
+    function _startTrainingPoller() {
+      if (_trainingPoller) clearInterval(_trainingPoller);
+      _trainingPoller = setInterval(async () => {
+        try {
+          const res = await axios.get(apiBase.value + "/api/training/job");
+          trainingJob.value = res.data;
+          if (!res.data.running) {
+            clearInterval(_trainingPoller);
+            _trainingPoller = null;
+            if (res.data.status === 'done') {
+              await fetchModelVersions();
+              await fetchAvailableModels();
+              await fetchTrainingStatus();
+            }
+          }
+        } catch (e) {
+          console.warn("無法取得訓練狀態", e);
+        }
+      }, 3000);
     }
 
     async function handleDownload(fr) {
@@ -1735,6 +1875,8 @@ createApp({
       if (compareSelected.value.length < 2) return alert("請至少選兩個 OCR 檔案");
       await ensureCustomAgent();
       compareLoading.value = true;
+      fieldExtractLoading.value = customFields.value.length > 0;
+      fieldExtractResults.value = null;
       compareHighlights.value = {};
       try {
         const overrides = compareSelected.value
@@ -1746,23 +1888,41 @@ createApp({
           })
           .filter(Boolean);
 
-        const res = await axios.post(apiBase.value + "/api/compare_ocr", {
+        // 比對 + 欄位擷取同步並行
+        const comparePromise = axios.post(apiBase.value + "/api/compare_ocr", {
           fileIds: compareSelected.value,
           overrides,
           agents: resolveOrder(),
           strategy: chatStrategy.value,
           batchId: currentBatchId.value || undefined
         });
-        compareResult.value = res.data;
-        const finalTxt = res.data?.payload?.final_result ?? res.data?.payload?.result ?? "";
+
+        const extractPromise = customFields.value.length > 0
+          ? Promise.all(compareSelected.value.map(async fileId => {
+              const res = await axios.post(apiBase.value + "/api/extract", {
+                fileId, fields: customFields.value,
+              });
+              return [fileId, { filename: res.data.filename, extracted: res.data.extracted }];
+            }))
+          : Promise.resolve(null);
+
+        const [compareRes, extractEntries] = await Promise.all([comparePromise, extractPromise]);
+
+        compareResult.value = compareRes.data;
+        const finalTxt = compareRes.data?.payload?.final_result ?? compareRes.data?.payload?.result ?? "";
         compareOriginalFinal.value = finalTxt;
         compareEditedFinal.value = compareOriginalFinal.value;
         compareEditing.value = false;
         buildCompareHighlightMap();
+
+        if (extractEntries) {
+          fieldExtractResults.value = Object.fromEntries(extractEntries);
+        }
       } catch (e) {
         alert("比對失敗，請稍後再試");
       } finally {
         compareLoading.value = false;
+        fieldExtractLoading.value = false;
       }
     }
 
@@ -2073,6 +2233,7 @@ createApp({
       fetchTrainingStatus();
       fetchAvailableModels();
       fetchModelVersions();
+      fetchFieldSchemes();
     });
     fetchAgents();
 
@@ -2150,11 +2311,26 @@ createApp({
       trainingStatus,
       fetchTrainingStatus,
       triggerTraining,
+      trainingJob,
+      trainingLogOpen,
       availableModels,
       modelVersions,
       modelVersionsLoading,
       fetchModelVersions,
       activateModelVersion,
+      customFields,
+      newFieldName,
+      fieldSchemes,
+      newSchemeName,
+      fieldExtractResults,
+      fieldExtractLoading,
+      addCustomField,
+      removeCustomField,
+      fetchFieldSchemes,
+      saveFieldScheme,
+      loadFieldScheme,
+      deleteFieldScheme,
+      extractFieldsForCompare,
       handleDownload,
       updateDiff,
       compareFiles,
@@ -2174,6 +2350,7 @@ createApp({
       downloadHistoryCompare,
       addDagEdge,
       handleCompareTableClick,
+      handleFieldTableClick,
       dagEdgeDst,
       dagEdgeSrc,
       dagEdges,

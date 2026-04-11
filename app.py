@@ -38,6 +38,7 @@ ocr_collection = mongo_client[MONGO_DB][MONGO_COL]
 ocr_batch_collection = mongo_client[MONGO_DB][MONGO_BATCH_COL]
 training_collection = mongo_client[MONGO_DB]["ocr_training_pairs"]
 model_versions_col = mongo_client[MONGO_DB]["ocr_model_versions"]
+field_schemes_col = mongo_client[MONGO_DB]["ocr_field_schemes"]
 
 TRAINING_THRESHOLD = 20   # 累積幾筆後建議重訓（測試用低門檻，正式可改100）
 CUSTOM_MODEL_DIR = OUTPUT_DIR   # 自訓練模型存放目錄
@@ -992,6 +993,65 @@ def extract_fields(req: ExtractRequest):
     }
 
 
+# ═══════════════════════════════════════════════════════════════
+#                      欄位方案管理
+# ═══════════════════════════════════════════════════════════════
+
+@app.get("/api/field_schemes")
+def list_field_schemes():
+    """列出所有儲存的欄位方案"""
+    docs = list(field_schemes_col.find({}, {"_id": 0}).sort("created_at", -1))
+    return {"schemes": docs}
+
+
+@app.post("/api/field_schemes")
+def save_field_scheme(body: dict = Body(...)):
+    """儲存欄位方案（name + fields）"""
+    name = (body.get("name") or "").strip()
+    fields = body.get("fields") or []
+    if not name:
+        raise HTTPException(status_code=400, detail="方案名稱不能為空")
+    if not fields or not isinstance(fields, list):
+        raise HTTPException(status_code=400, detail="欄位清單不能為空")
+
+    scheme_id = str(uuid.uuid4())[:8]
+    doc = {
+        "scheme_id": scheme_id,
+        "name": name,
+        "fields": [f.strip() for f in fields if str(f).strip()],
+        "created_at": datetime.utcnow().isoformat(),
+    }
+    field_schemes_col.insert_one(doc)
+    # insert_one 會就地修改 doc 加入 ObjectId，需移除才能 JSON 序列化
+    doc.pop("_id", None)
+    return {"ok": True, "scheme": doc}
+
+
+@app.put("/api/field_schemes/{scheme_id}")
+def update_field_scheme(scheme_id: str, body: dict = Body(...)):
+    """更新欄位方案"""
+    name = (body.get("name") or "").strip()
+    fields = body.get("fields") or []
+    if not field_schemes_col.find_one({"scheme_id": scheme_id}):
+        raise HTTPException(status_code=404, detail="找不到此方案")
+    update = {}
+    if name:
+        update["name"] = name
+    if fields:
+        update["fields"] = [f.strip() for f in fields if str(f).strip()]
+    field_schemes_col.update_one({"scheme_id": scheme_id}, {"$set": update})
+    return {"ok": True}
+
+
+@app.delete("/api/field_schemes/{scheme_id}")
+def delete_field_scheme(scheme_id: str):
+    """刪除欄位方案"""
+    result = field_schemes_col.delete_one({"scheme_id": scheme_id})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="找不到此方案")
+    return {"ok": True}
+
+
 @app.post("/api/export/gsheet")
 def export_to_gsheet(req: ExportGSheetRequest):
     """將擷取結果寫入 Google Sheets（使用 OAuth token）"""
@@ -1269,27 +1329,89 @@ def training_status():
     }
 
 
+
+# 全域訓練任務狀態（單一任務，同時只允許一個）
+_training_job: Dict[str, Any] = {
+    "running": False,
+    "job_id": None,
+    "started_at": None,
+    "log": [],
+    "status": "idle",   # idle | running | done | error
+    "message": "",
+}
+
+
 @app.post("/api/training/trigger")
 def trigger_training():
-    """觸發 Tesseract 重訓（需累積足夠資料）"""
-    import subprocess, tempfile, shutil
+    """在背景啟動 Tesseract LSTM fine-tune，立即回傳 job_id"""
+    import subprocess, threading
+
+    if _training_job["running"]:
+        raise HTTPException(status_code=409, detail="訓練正在進行中，請稍候")
 
     count = training_collection.count_documents({})
     if count < TRAINING_THRESHOLD:
         raise HTTPException(
             status_code=400,
-            detail=f"訓練資料不足，目前 {count} 筆，需要 {TRAINING_THRESHOLD} 筆"
+            detail=f"訓練資料不足，目前 {count} 筆，需要 {TRAINING_THRESHOLD} 筆",
         )
 
-    # 匯出訓練資料
-    pairs = list(training_collection.find({}, {"_id": 0, "original_text": 1, "corrected_text": 1}))
-    export_path = os.path.join(OUTPUT_DIR, "training_pairs.json")
-    with open(export_path, "w", encoding="utf-8") as f:
-        json.dump(pairs, f, ensure_ascii=False, indent=2)
+    job_id = str(uuid.uuid4())[:8]
+    _training_job.update({
+        "running": True,
+        "job_id": job_id,
+        "started_at": datetime.utcnow().isoformat(),
+        "log": [],
+        "status": "running",
+        "message": "訓練啟動中…",
+    })
 
+    trainer_script = os.path.join(APP_DIR, "tesseract_trainer.py")
+    uv_bin = os.path.join(APP_DIR, ".venv", "bin", "python")
+    if not os.path.exists(uv_bin):
+        uv_bin = sys.executable
+
+    def _run():
+        try:
+            proc = subprocess.Popen(
+                [uv_bin, trainer_script],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                cwd=APP_DIR,
+            )
+            for line in proc.stdout:
+                line = line.rstrip()
+                _training_job["log"].append(line)
+                # 只保留最新 200 行，避免記憶體無限成長
+                if len(_training_job["log"]) > 200:
+                    _training_job["log"] = _training_job["log"][-200:]
+            proc.wait()
+            if proc.returncode == 0:
+                _training_job["status"] = "done"
+                _training_job["message"] = "訓練完成！新模型已就緒。"
+            else:
+                _training_job["status"] = "error"
+                _training_job["message"] = f"訓練失敗（exit code {proc.returncode}）"
+        except Exception as e:
+            _training_job["status"] = "error"
+            _training_job["message"] = str(e)
+        finally:
+            _training_job["running"] = False
+
+    threading.Thread(target=_run, daemon=True).start()
+
+    return {"ok": True, "job_id": job_id, "msg": "訓練已在背景啟動"}
+
+
+@app.get("/api/training/job")
+def training_job_status():
+    """查詢目前訓練任務狀態與 log"""
     return {
-        "ok": True,
-        "total_pairs": count,
-        "export_path": export_path,
-        "msg": f"已匯出 {count} 筆訓練資料到 {export_path}，可用於後續 Tesseract 訓練流程",
+        "running": _training_job["running"],
+        "job_id": _training_job["job_id"],
+        "started_at": _training_job["started_at"],
+        "status": _training_job["status"],
+        "message": _training_job["message"],
+        "log": _training_job["log"],
     }
